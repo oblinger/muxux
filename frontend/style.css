@@ -1,0 +1,21 @@
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  color: #f6f6f6;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+#app {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  background: rgba(30, 30, 30, 0.92);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
