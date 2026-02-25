@@ -421,9 +421,14 @@ pub fn run() {
                     .build()?;
 
                 let handle_for_tray = app.handle().clone();
-                let _tray = TrayIconBuilder::new()
-                    .icon(app.default_window_icon().cloned().unwrap())
-                    .menu(&menu)
+                let mut builder = TrayIconBuilder::new()
+                    .title("MuxUX")
+                    .tooltip("MuxUX — Structure App")
+                    .menu(&menu);
+                if let Some(icon) = app.default_window_icon().cloned() {
+                    builder = builder.icon(icon);
+                }
+                let _tray = builder
                     .on_menu_event(move |_app, event| {
                         match event.id().as_ref() {
                             tray_menu_ids::SHOW => {
@@ -439,7 +444,7 @@ pub fn run() {
             }
 
             // ---------------------------------------------------------------
-            // Global hotkey: Cmd+Shift+Space (macOS) / Ctrl+Shift+Space
+            // Global hotkey: Ctrl+Shift+Space (all platforms)
             // ---------------------------------------------------------------
             #[cfg(desktop)]
             {
@@ -448,11 +453,7 @@ pub fn run() {
                 };
 
                 let shortcut = Shortcut::new(
-                    Some(if cfg!(target_os = "macos") {
-                        Modifiers::META | Modifiers::SHIFT
-                    } else {
-                        Modifiers::CONTROL | Modifiers::SHIFT
-                    }),
+                    Some(Modifiers::CONTROL | Modifiers::SHIFT),
                     Code::Space,
                 );
 
