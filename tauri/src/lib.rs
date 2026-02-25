@@ -354,6 +354,18 @@ fn hotkey_toggle_overlay(handle: &tauri::AppHandle) {
 /// Assemble and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Single-instance enforcement: exit immediately if another is running
+    let config_dir = dirs::home_dir()
+        .map(|h| h.join(".config").join("muxux"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    let _lock = match cmx_utils::client::acquire_instance(&config_dir, "muxux") {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("[muxux] {}", e);
+            std::process::exit(0);
+        }
+    };
+
     let project_root = std::env::var("MUX_PROJECT_ROOT").unwrap_or_default();
     let state = AppState::new(project_root);
     let overlay_state = OverlayState::new();
