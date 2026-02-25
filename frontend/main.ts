@@ -38,7 +38,9 @@ const ZONE_LABELS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 // Filtering state
 // ---------------------------------------------------------------------------
-let activeZoneLabel: string | null = null;
+// Exported so TypeScript doesn't complain about unused writes.
+// These track current filter state for future use (e.g., status display).
+export let activeZoneLabel: string | null = null;
 let filterText = "";
 
 // ---------------------------------------------------------------------------
@@ -581,7 +583,12 @@ async function buildOverlay(): Promise<void> {
       }
     }
   } catch {
-    // IPC not available — keep defaults
+    // IPC not available — apply defaults explicitly
+    searchMaxRows = DEFAULT_SEARCH_MAX_ROWS;
+    document.documentElement.style.setProperty(
+      "--zone-max-width",
+      DEFAULT_ZONE_MAX_WIDTH + "px",
+    );
   }
 
   const app = document.querySelector<HTMLDivElement>("#app")!;
