@@ -73,6 +73,8 @@ fn parse_args(args: &[&str]) -> Result<Command, String> {
         "layout" => parse_layout(args),
         "client" => parse_client(args),
         "daemon" => parse_daemon(args),
+        "studio" => parse_studio(args),
+        "setup" => parse_setup(args),
         "watch" => Ok(Command::Watch {
             since: None,
             timeout: None,
@@ -171,6 +173,33 @@ fn parse_daemon(args: &[&str]) -> Result<Command, String> {
 }
 
 
+fn parse_studio(args: &[&str]) -> Result<Command, String> {
+    let pane = find_flag(args, "--pane")
+        .ok_or("Usage: mux studio --pane <id> --x <n> --y <n>")?;
+    let x = find_flag(args, "--x")
+        .ok_or("Usage: mux studio --pane <id> --x <n> --y <n>")?
+        .parse::<u32>()
+        .map_err(|_| "Invalid value for --x: expected integer".to_string())?;
+    let y = find_flag(args, "--y")
+        .ok_or("Usage: mux studio --pane <id> --x <n> --y <n>")?
+        .parse::<u32>()
+        .map_err(|_| "Invalid value for --y: expected integer".to_string())?;
+    Ok(Command::Studio { pane, x, y })
+}
+
+
+fn parse_setup(args: &[&str]) -> Result<Command, String> {
+    if args.len() < 2 {
+        return Err("Usage: mux setup <hook|unhook>".into());
+    }
+    match args[1] {
+        "hook" => Ok(Command::SetupHook),
+        "unhook" => Ok(Command::RemoveHook),
+        _ => Err(format!("Unknown setup subcommand: '{}'", args[1])),
+    }
+}
+
+
 fn find_flag(args: &[&str], flag: &str) -> Option<String> {
     for (i, arg) in args.iter().enumerate() {
         if *arg == flag {
@@ -178,4 +207,62 @@ fn find_flag(args: &[&str], flag: &str) -> Option<String> {
         }
     }
     None
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_studio_all_flags() {
+        let args = vec!["studio", "--pane", "%1", "--x", "50", "--y", "30"];
+        let cmd = parse_args(&args).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Studio {
+                pane: "%1".into(),
+                x: 50,
+                y: 30,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_studio_missing_pane() {
+        let args = vec!["studio", "--x", "50", "--y", "30"];
+        assert!(parse_args(&args).is_err());
+    }
+
+    #[test]
+    fn parse_studio_invalid_x() {
+        let args = vec!["studio", "--pane", "%1", "--x", "abc", "--y", "30"];
+        assert!(parse_args(&args).is_err());
+    }
+
+    #[test]
+    fn parse_setup_hook() {
+        let args = vec!["setup", "hook"];
+        let cmd = parse_args(&args).unwrap();
+        assert_eq!(cmd, Command::SetupHook);
+    }
+
+    #[test]
+    fn parse_setup_unhook() {
+        let args = vec!["setup", "unhook"];
+        let cmd = parse_args(&args).unwrap();
+        assert_eq!(cmd, Command::RemoveHook);
+    }
+
+    #[test]
+    fn parse_setup_no_subcommand() {
+        let args = vec!["setup"];
+        assert!(parse_args(&args).is_err());
+    }
+
+    #[test]
+    fn parse_setup_unknown_subcommand() {
+        let args = vec!["setup", "foo"];
+        assert!(parse_args(&args).is_err());
+    }
 }

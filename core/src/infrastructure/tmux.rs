@@ -127,6 +127,20 @@ impl TmuxCommandBuilder {
             shell_escape(name)
         )
     }
+
+    /// Generate the tmux command to bind right-click to MuxUX overlay.
+    /// `mux_binary` is the path to the `mux` CLI binary.
+    pub fn bind_mouse_hook(&self, mux_binary: &str) -> String {
+        format!(
+            "tmux bind -n MouseDown3Pane run-shell \"{} studio --pane #{{pane_id}} --x #{{mouse_x}} --y #{{mouse_y}}\"",
+            shell_escape(mux_binary)
+        )
+    }
+
+    /// Generate the tmux command to unbind the right-click hook.
+    pub fn unbind_mouse_hook(&self) -> String {
+        "tmux unbind -n MouseDown3Pane".to_string()
+    }
 }
 
 impl Default for TmuxCommandBuilder {
@@ -775,6 +789,31 @@ mod tests {
         let drained = backend.drain_commands();
         assert_eq!(drained.len(), 1);
         assert!(backend.commands.is_empty());
+    }
+
+    #[test]
+    fn cmd_bind_mouse_hook() {
+        let b = TmuxCommandBuilder::new();
+        let cmd = b.bind_mouse_hook("mux");
+        assert!(cmd.starts_with("tmux bind -n MouseDown3Pane run-shell"));
+        assert!(cmd.contains("mux studio"));
+        assert!(cmd.contains("--pane"));
+        assert!(cmd.contains("--x"));
+        assert!(cmd.contains("--y"));
+    }
+
+    #[test]
+    fn cmd_bind_mouse_hook_with_path() {
+        let b = TmuxCommandBuilder::new();
+        let cmd = b.bind_mouse_hook("/usr/local/bin/mux");
+        assert!(cmd.contains("/usr/local/bin/mux studio"));
+    }
+
+    #[test]
+    fn cmd_unbind_mouse_hook() {
+        let b = TmuxCommandBuilder::new();
+        let cmd = b.unbind_mouse_hook();
+        assert_eq!(cmd, "tmux unbind -n MouseDown3Pane");
     }
 
     #[test]

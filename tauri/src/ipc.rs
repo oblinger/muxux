@@ -161,6 +161,39 @@ pub fn mux_get_target_pane(
     }
 }
 
+/// Toggle the overlay: if visible, hide it; if hidden, query tmux and show it.
+///
+/// This provides the same toggle behavior as the global hotkey but accessible
+/// from the frontend via IPC.
+#[tauri::command]
+pub fn mux_toggle_overlay(
+    window: tauri::WebviewWindow,
+    overlay: State<'_, crate::OverlayState>,
+) -> IpcResponse {
+    if overlay.is_visible() {
+        overlay.hide();
+        let _ = window.hide();
+        IpcResponse::success("overlay hidden".into())
+    } else {
+        let pane_id = crate::query_tmux_pane_id().unwrap_or_default();
+        overlay.show(pane_id.clone());
+
+        // Phase 1: center on screen
+        if let Some(monitor) = window.current_monitor().ok().flatten() {
+            let size = monitor.size();
+            let pos = monitor.position();
+            let win_w = 400_i32;
+            let win_h = 400_i32;
+            let cx = pos.x + (size.width as i32 - win_w) / 2;
+            let cy = pos.y + (size.height as i32 - win_h) / 2;
+            let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+        }
+        let _ = window.show();
+        let _ = window.set_focus();
+        IpcResponse::success(format!("overlay shown for pane {}", pane_id))
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Tests

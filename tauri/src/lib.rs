@@ -24,9 +24,21 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 
+/// Menu item IDs used by the tray icon menu.
+///
+/// Exposed as constants so they can be tested and referenced consistently.
+pub mod tray_menu_ids {
+    pub const SHOW: &str = "show";
+    pub const CONFIG: &str = "config";
+    pub const HELP: &str = "help";
+    pub const QUIT: &str = "quit";
+}
+
+
 /// Overlay window state, separate from core AppState.
 ///
 /// Tracks the overlay visibility and the target tmux pane ID.
+/// Also used by the tray icon's "Show MuxUX" menu item to toggle overlay.
 pub struct OverlayState {
     pub visible: Mutex<bool>,
     pub target_pane: Mutex<Option<String>>,
@@ -57,6 +69,82 @@ impl OverlayState {
     pub fn is_visible(&self) -> bool {
         *self.visible.lock().unwrap()
     }
+
+    /// Toggle visibility. If currently visible, hide. If hidden, show with
+    /// the given pane_id. Returns the new visibility state.
+    pub fn toggle(&self, pane_id: String) -> bool {
+        if self.is_visible() {
+            self.hide();
+            false
+        } else {
+            self.show(pane_id);
+            true
+        }
+    }
+}
+
+
+/// Information about a tmux pane: its ID and character-grid position.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TmuxPaneInfo {
+    pub pane_id: String,
+    pub left: u32,
+    pub top: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+
+/// Query tmux for the current pane ID.
+///
+/// Runs `tmux display-message -p '#{pane_id}'` and returns the trimmed output,
+/// or `None` if tmux is unavailable.
+pub fn query_tmux_pane_id() -> Option<String> {
+    let output = std::process::Command::new("tmux")
+        .args(["display-message", "-p", "#{pane_id}"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if id.is_empty() { None } else { Some(id) }
+}
+
+
+/// Query tmux for the current pane's position and size in character cells.
+///
+/// Runs `tmux display-message -p '#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}'`
+/// and parses the output.
+pub fn query_tmux_pane_info() -> Option<TmuxPaneInfo> {
+    let output = std::process::Command::new("tmux")
+        .args([
+            "display-message",
+            "-p",
+            "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_tmux_pane_info(&String::from_utf8_lossy(&output.stdout))
+}
+
+
+/// Parse tmux pane info from a string like `%42 0 0 80 24`.
+pub fn parse_tmux_pane_info(s: &str) -> Option<TmuxPaneInfo> {
+    let parts: Vec<&str> = s.trim().split_whitespace().collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    Some(TmuxPaneInfo {
+        pane_id: parts[0].to_string(),
+        left: parts[1].parse().ok()?,
+        top: parts[2].parse().ok()?,
+        width: parts[3].parse().ok()?,
+        height: parts[4].parse().ok()?,
+    })
 }
 
 
@@ -202,6 +290,42 @@ impl AppState {
 }
 
 
+/// Handle the global hotkey toggle: query tmux, then show/hide the overlay.
+///
+/// Called from the global shortcut handler and the tray icon "Show MuxUX" menu item.
+fn hotkey_toggle_overlay(handle: &tauri::AppHandle) {
+    let overlay: tauri::State<OverlayState> = handle.state();
+
+    if overlay.is_visible() {
+        // Currently visible — hide it
+        overlay.hide();
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.hide();
+        }
+    } else {
+        // Query tmux for the active pane
+        let pane_id = query_tmux_pane_id().unwrap_or_default();
+        overlay.show(pane_id);
+
+        if let Some(window) = handle.get_webview_window("main") {
+            // Phase 1: center on screen rather than mapping pane coordinates.
+            // We use the monitor's center as a reasonable default.
+            if let Some(monitor) = window.current_monitor().ok().flatten() {
+                let size = monitor.size();
+                let pos = monitor.position();
+                let win_w = 400_i32;
+                let win_h = 400_i32;
+                let cx = pos.x + (size.width as i32 - win_w) / 2;
+                let cy = pos.y + (size.height as i32 - win_h) / 2;
+                let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+            }
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
+}
+
+
 /// Assemble and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -232,8 +356,10 @@ pub fn run() {
             ipc::mux_show_overlay,
             ipc::mux_hide_overlay,
             ipc::mux_get_target_pane,
+            ipc::mux_toggle_overlay,
         ])
         .setup(move |app| {
+            // Handle CLI overlay args (existing right-click trigger path)
             if let Some(args) = overlay_args {
                 if let Some(window) = app.get_webview_window("main") {
                     let overlay: tauri::State<OverlayState> = app.state();
@@ -246,6 +372,88 @@ pub fn run() {
                     let _ = window.set_focus();
                 }
             }
+
+            // ---------------------------------------------------------------
+            // Tray icon setup — persistent macOS menu bar icon (M8.2.4)
+            // ---------------------------------------------------------------
+            {
+                use tauri::tray::TrayIconBuilder;
+                use tauri::menu::{MenuBuilder, MenuItemBuilder};
+
+                let show_item = MenuItemBuilder::with_id(
+                    tray_menu_ids::SHOW, "Show MuxUX",
+                ).build(app)?;
+                let config_item = MenuItemBuilder::with_id(
+                    tray_menu_ids::CONFIG, "Config",
+                ).build(app)?;
+                let help_item = MenuItemBuilder::with_id(
+                    tray_menu_ids::HELP, "Help",
+                ).build(app)?;
+                let quit_item = MenuItemBuilder::with_id(
+                    tray_menu_ids::QUIT, "Quit",
+                ).build(app)?;
+
+                let menu = MenuBuilder::new(app)
+                    .item(&show_item)
+                    .separator()
+                    .item(&config_item)
+                    .item(&help_item)
+                    .separator()
+                    .item(&quit_item)
+                    .build()?;
+
+                let handle_for_tray = app.handle().clone();
+                let _tray = TrayIconBuilder::new()
+                    .icon(app.default_window_icon().cloned().unwrap())
+                    .menu(&menu)
+                    .on_menu_event(move |_app, event| {
+                        match event.id().as_ref() {
+                            tray_menu_ids::SHOW => {
+                                hotkey_toggle_overlay(&handle_for_tray);
+                            }
+                            tray_menu_ids::QUIT => {
+                                std::process::exit(0);
+                            }
+                            _ => {} // config, help — placeholder for now
+                        }
+                    })
+                    .build(app)?;
+            }
+
+            // ---------------------------------------------------------------
+            // Global hotkey: Cmd+Shift+Space (macOS) / Ctrl+Shift+Space
+            // ---------------------------------------------------------------
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::{
+                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+                };
+
+                let shortcut = Shortcut::new(
+                    Some(if cfg!(target_os = "macos") {
+                        Modifiers::META | Modifiers::SHIFT
+                    } else {
+                        Modifiers::CONTROL | Modifiers::SHIFT
+                    }),
+                    Code::Space,
+                );
+
+                let handle = app.handle().clone();
+                app.handle().plugin(
+                    tauri_plugin_global_shortcut::Builder::new()
+                        .with_handler(move |_app, fired, event| {
+                            if fired == &shortcut
+                                && matches!(event.state(), ShortcutState::Pressed)
+                            {
+                                hotkey_toggle_overlay(&handle);
+                            }
+                        })
+                        .build(),
+                )?;
+
+                app.global_shortcut().register(shortcut)?;
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -385,6 +593,70 @@ mod tests {
     }
 
     #[test]
+    fn overlay_toggle_show_hide_show() {
+        let overlay = OverlayState::new();
+
+        // Toggle from hidden -> visible
+        let now_visible = overlay.toggle("%10".into());
+        assert!(now_visible);
+        assert!(overlay.is_visible());
+        assert_eq!(overlay.get_target_pane(), Some("%10".into()));
+
+        // Toggle from visible -> hidden
+        let now_visible = overlay.toggle("%10".into());
+        assert!(!now_visible);
+        assert!(!overlay.is_visible());
+
+        // Toggle from hidden -> visible again (with new pane)
+        let now_visible = overlay.toggle("%20".into());
+        assert!(now_visible);
+        assert!(overlay.is_visible());
+        assert_eq!(overlay.get_target_pane(), Some("%20".into()));
+    }
+
+    #[test]
+    fn parse_tmux_pane_info_valid() {
+        let info = parse_tmux_pane_info("%42 0 0 80 24").unwrap();
+        assert_eq!(info.pane_id, "%42");
+        assert_eq!(info.left, 0);
+        assert_eq!(info.top, 0);
+        assert_eq!(info.width, 80);
+        assert_eq!(info.height, 24);
+    }
+
+    #[test]
+    fn parse_tmux_pane_info_with_offset() {
+        let info = parse_tmux_pane_info("%7 10 5 120 40").unwrap();
+        assert_eq!(info.pane_id, "%7");
+        assert_eq!(info.left, 10);
+        assert_eq!(info.top, 5);
+        assert_eq!(info.width, 120);
+        assert_eq!(info.height, 40);
+    }
+
+    #[test]
+    fn parse_tmux_pane_info_trailing_newline() {
+        let info = parse_tmux_pane_info("%1 0 0 80 24\n").unwrap();
+        assert_eq!(info.pane_id, "%1");
+        assert_eq!(info.width, 80);
+    }
+
+    #[test]
+    fn parse_tmux_pane_info_too_few_parts() {
+        assert!(parse_tmux_pane_info("%42 0 0").is_none());
+    }
+
+    #[test]
+    fn parse_tmux_pane_info_empty() {
+        assert!(parse_tmux_pane_info("").is_none());
+    }
+
+    #[test]
+    fn parse_tmux_pane_info_bad_number() {
+        assert!(parse_tmux_pane_info("%42 x 0 80 24").is_none());
+    }
+
+    #[test]
     fn drain_actions_clears() {
         let state = test_state();
         state.layout_row("main".into(), None);
@@ -420,5 +692,43 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Tray menu ID tests (M8.2.4)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn tray_menu_ids_are_distinct() {
+        let ids = [
+            tray_menu_ids::SHOW,
+            tray_menu_ids::CONFIG,
+            tray_menu_ids::HELP,
+            tray_menu_ids::QUIT,
+        ];
+        // All IDs must be unique
+        for (i, a) in ids.iter().enumerate() {
+            for (j, b) in ids.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "tray menu IDs must be unique");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tray_menu_ids_match_expected_strings() {
+        assert_eq!(tray_menu_ids::SHOW, "show");
+        assert_eq!(tray_menu_ids::CONFIG, "config");
+        assert_eq!(tray_menu_ids::HELP, "help");
+        assert_eq!(tray_menu_ids::QUIT, "quit");
+    }
+
+    #[test]
+    fn tray_menu_ids_not_empty() {
+        assert!(!tray_menu_ids::SHOW.is_empty());
+        assert!(!tray_menu_ids::CONFIG.is_empty());
+        assert!(!tray_menu_ids::HELP.is_empty());
+        assert!(!tray_menu_ids::QUIT.is_empty());
     }
 }

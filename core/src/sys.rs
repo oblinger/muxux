@@ -42,6 +42,9 @@ impl Sys {
                 output: "MuxUX daemon shutting down".into(),
             },
             Command::Help { topic } => self.cmd_help(topic),
+            Command::Studio { pane, x, y } => self.cmd_studio(pane, x, y),
+            Command::SetupHook => self.cmd_setup_hook(),
+            Command::RemoveHook => self.cmd_remove_hook(),
         }
     }
 
@@ -155,6 +158,30 @@ impl Sys {
     }
 
     // -----------------------------------------------------------------------
+    // Overlay / Hook commands
+    // -----------------------------------------------------------------------
+
+    fn cmd_studio(&self, pane: String, x: u32, y: u32) -> Response {
+        Response::Ok {
+            output: format!("overlay target: pane={} x={} y={}", pane, x, y),
+        }
+    }
+
+    fn cmd_setup_hook(&self) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        Response::Ok {
+            output: builder.bind_mouse_hook("mux"),
+        }
+    }
+
+    fn cmd_remove_hook(&self) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        Response::Ok {
+            output: builder.unbind_mouse_hook(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Help
     // -----------------------------------------------------------------------
 
@@ -205,6 +232,49 @@ mod tests {
         let resp = sys.execute(Command::Help { topic: None });
         match resp {
             Response::Ok { output } => assert!(output.contains("mux")),
+            Response::Error { message } => panic!("Unexpected error: {}", message),
+        }
+    }
+
+    #[test]
+    fn studio_returns_overlay_target() {
+        let mut sys = Sys::new("/tmp".into());
+        let resp = sys.execute(Command::Studio {
+            pane: "%1".into(),
+            x: 50,
+            y: 30,
+        });
+        match resp {
+            Response::Ok { output } => {
+                assert!(output.contains("pane=%1"));
+                assert!(output.contains("x=50"));
+                assert!(output.contains("y=30"));
+            }
+            Response::Error { message } => panic!("Unexpected error: {}", message),
+        }
+    }
+
+    #[test]
+    fn setup_hook_returns_bind_command() {
+        let mut sys = Sys::new("/tmp".into());
+        let resp = sys.execute(Command::SetupHook);
+        match resp {
+            Response::Ok { output } => {
+                assert!(output.contains("tmux bind -n MouseDown3Pane"));
+                assert!(output.contains("mux studio"));
+            }
+            Response::Error { message } => panic!("Unexpected error: {}", message),
+        }
+    }
+
+    #[test]
+    fn remove_hook_returns_unbind_command() {
+        let mut sys = Sys::new("/tmp".into());
+        let resp = sys.execute(Command::RemoveHook);
+        match resp {
+            Response::Ok { output } => {
+                assert!(output.contains("tmux unbind -n MouseDown3Pane"));
+            }
             Response::Error { message } => panic!("Unexpected error: {}", message),
         }
     }

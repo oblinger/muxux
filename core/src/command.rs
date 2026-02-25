@@ -98,6 +98,23 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         topic: Option<String>,
     },
+
+    // -----------------------------------------------------------------
+    // Overlay / Hook commands
+    // -----------------------------------------------------------------
+
+    #[serde(rename = "studio")]
+    Studio {
+        pane: String,
+        x: u32,
+        y: u32,
+    },
+
+    #[serde(rename = "setup.hook")]
+    SetupHook,
+
+    #[serde(rename = "setup.unhook")]
+    RemoveHook,
 }
 
 
@@ -143,6 +160,37 @@ mod tests {
         let cmd = Command::ClientNext;
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"command\":\"client.next\""));
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn studio_round_trip() {
+        let cmd = Command::Studio {
+            pane: "%1".into(),
+            x: 50,
+            y: 30,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"command\":\"studio\""));
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn setup_hook_round_trip() {
+        let cmd = Command::SetupHook;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"command\":\"setup.hook\""));
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn remove_hook_round_trip() {
+        let cmd = Command::RemoveHook;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"command\":\"setup.unhook\""));
         let back: Command = serde_json::from_str(&json).unwrap();
         assert_eq!(back, cmd);
     }
