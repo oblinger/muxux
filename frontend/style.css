@@ -22,6 +22,15 @@ html, body {
   position: relative;
   width: 400px;
   height: 400px;
+  background: radial-gradient(
+    circle at center,
+    rgba(20, 20, 30, 0.92) 0%,
+    rgba(15, 15, 25, 0.85) 60%,
+    rgba(10, 10, 20, 0.70) 100%
+  );
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 
 /* ------------------------------------------------------------------ */
