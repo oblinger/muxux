@@ -232,12 +232,27 @@ impl AppState {
         sys.drain_actions()
     }
 
+    /// Return frontend-relevant settings as a JSON string.
+    pub fn get_settings(&self) -> String {
+        let sys = self.sys.lock().unwrap();
+        let s = sys.settings();
+        serde_json::json!({
+            "zone_max_width": s.zone_max_width,
+            "search_max_rows": s.search_max_rows,
+        })
+        .to_string()
+    }
+
     // -------------------------------------------------------------------
     // Top-level commands
     // -------------------------------------------------------------------
 
     pub fn status(&self) -> Response {
         self.execute(Command::Status { format: None })
+    }
+
+    pub fn session_list(&self) -> Response {
+        self.execute(Command::SessionList)
     }
 
     pub fn view(&self, name: String) -> Response {
@@ -340,8 +355,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Top-level
             ipc::mux_status,
+            ipc::mux_session_list,
             ipc::mux_view,
             ipc::mux_help,
+            // Settings
+            ipc::mux_get_settings,
             // Layout
             ipc::mux_layout_row,
             ipc::mux_layout_column,
@@ -486,6 +504,16 @@ mod tests {
         let state = test_state();
         let r = state.status();
         assert!(is_ok(&r));
+    }
+
+    #[test]
+    fn session_list_returns_json_array() {
+        let state = test_state();
+        let r = state.session_list();
+        assert!(is_ok(&r));
+        // Output must be valid JSON array (may be empty if tmux unavailable)
+        let parsed: serde_json::Value = serde_json::from_str(output(&r)).unwrap();
+        assert!(parsed.is_array());
     }
 
     #[test]
@@ -730,5 +758,38 @@ mod tests {
         assert!(!tray_menu_ids::CONFIG.is_empty());
         assert!(!tray_menu_ids::HELP.is_empty());
         assert!(!tray_menu_ids::QUIT.is_empty());
+    }
+
+    // -------------------------------------------------------------------
+    // Settings tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn get_settings_returns_valid_json() {
+        let state = test_state();
+        let json_str = state.get_settings();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert!(parsed.is_object());
+    }
+
+    #[test]
+    fn get_settings_contains_expected_keys() {
+        let state = test_state();
+        let json_str = state.get_settings();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["zone_max_width"], 160);
+        assert_eq!(parsed["search_max_rows"], 10);
+    }
+
+    #[test]
+    fn get_settings_only_frontend_fields() {
+        let state = test_state();
+        let json_str = state.get_settings();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let obj = parsed.as_object().unwrap();
+        // Should contain exactly the two frontend-relevant fields
+        assert_eq!(obj.len(), 2);
+        assert!(obj.contains_key("zone_max_width"));
+        assert!(obj.contains_key("search_max_rows"));
     }
 }

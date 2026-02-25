@@ -46,6 +46,11 @@ pub fn mux_status(state: State<'_, AppState>) -> IpcResponse {
 }
 
 #[tauri::command]
+pub fn mux_session_list(state: State<'_, AppState>) -> IpcResponse {
+    to_ipc(state.session_list())
+}
+
+#[tauri::command]
 pub fn mux_view(state: State<'_, AppState>, name: String) -> IpcResponse {
     to_ipc(state.view(name))
 }
@@ -53,6 +58,16 @@ pub fn mux_view(state: State<'_, AppState>, name: String) -> IpcResponse {
 #[tauri::command]
 pub fn mux_help(state: State<'_, AppState>, topic: Option<String>) -> IpcResponse {
     to_ipc(state.help(topic))
+}
+
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn mux_get_settings(state: State<'_, AppState>) -> IpcResponse {
+    IpcResponse::success(state.get_settings())
 }
 
 
@@ -275,5 +290,19 @@ mod tests {
         let r3 = IpcResponse::error("ok".into());
         assert_eq!(r1, r2);
         assert_ne!(r1, r3);
+    }
+
+    #[test]
+    fn ipc_response_settings_json_round_trip() {
+        // Verify that a settings JSON payload survives IpcResponse serialization
+        let settings_json = r#"{"zone_max_width":160,"search_max_rows":10}"#;
+        let r = IpcResponse::success(settings_json.into());
+        let serialized = serde_json::to_string(&r).unwrap();
+        let back: IpcResponse = serde_json::from_str(&serialized).unwrap();
+        assert!(back.ok);
+        // Parse the inner data as JSON to verify structure
+        let inner: serde_json::Value = serde_json::from_str(&back.data).unwrap();
+        assert_eq!(inner["zone_max_width"], 160);
+        assert_eq!(inner["search_max_rows"], 10);
     }
 }

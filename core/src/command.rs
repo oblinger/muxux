@@ -19,6 +19,9 @@ pub enum Command {
         format: Option<String>,
     },
 
+    #[serde(rename = "session.list")]
+    SessionList,
+
     #[serde(rename = "view")]
     View {
         name: String,
@@ -127,6 +130,15 @@ mod tests {
         let cmd = Command::Status { format: None };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"command\":\"status\""));
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn session_list_round_trip() {
+        let cmd = Command::SessionList;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"command\":\"session.list\""));
         let back: Command = serde_json::from_str(&json).unwrap();
         assert_eq!(back, cmd);
     }

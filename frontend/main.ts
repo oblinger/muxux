@@ -52,7 +52,10 @@ interface SearchableItem {
   element?: HTMLDivElement;
 }
 
-const SEARCH_MAX_ROWS = 10;
+const DEFAULT_SEARCH_MAX_ROWS = 10;
+const DEFAULT_ZONE_MAX_WIDTH = 160;
+
+let searchMaxRows = DEFAULT_SEARCH_MAX_ROWS;
 
 let spotlightDropdown: HTMLDivElement | null = null;
 let spotlightItems: SearchableItem[] = [];
@@ -319,39 +322,19 @@ function handleItemClick(item: HTMLDivElement): void {
 // ---------------------------------------------------------------------------
 async function fetchSessionNames(): Promise<string[]> {
   try {
-    const resp: IpcResponse = await invoke("mux_status");
+    const resp: IpcResponse = await invoke("mux_session_list");
     if (resp.ok && resp.data) {
-      // mux_status returns session info as text.
-      // Try to extract session names — look for lines that could be session names.
-      // Common formats: bare names, "name: ...", JSON with name fields, etc.
-      const lines = resp.data.split("\n").filter((l) => l.trim().length > 0);
-
-      // Try JSON parse first
-      try {
-        const parsed: unknown = JSON.parse(resp.data);
-        if (Array.isArray(parsed)) {
-          const names = parsed
-            .map((entry: unknown) => {
-              if (typeof entry === "string") return entry;
-              if (
-                typeof entry === "object" &&
-                entry !== null &&
-                "name" in entry
-              ) {
-                return String((entry as { name: unknown }).name);
-              }
-              return null;
-            })
-            .filter((n): n is string => n !== null);
-          if (names.length > 0) return names;
-        }
-      } catch {
-        // Not JSON — fall through to line-based parsing
-      }
-
-      // Use non-empty lines as session names (trim whitespace)
-      if (lines.length > 0) {
-        return lines.map((l) => l.trim()).slice(0, 8);
+      const parsed: unknown = JSON.parse(resp.data);
+      if (Array.isArray(parsed)) {
+        const names = parsed
+          .map((entry: unknown) => {
+            if (typeof entry === "object" && entry !== null && "name" in entry) {
+              return String((entry as { name: unknown }).name);
+            }
+            return null;
+          })
+          .filter((n): n is string => n !== null);
+        if (names.length > 0) return names;
       }
     }
   } catch {
@@ -418,7 +401,7 @@ function showSpotlightDropdown(query: string): void {
   );
 
   // Limit to max rows
-  const displayItems = spotlightItems.slice(0, SEARCH_MAX_ROWS);
+  const displayItems = spotlightItems.slice(0, searchMaxRows);
 
   // Build dropdown content
   spotlightDropdown.innerHTML = "";
@@ -582,6 +565,25 @@ async function buildOverlay(): Promise<void> {
   activeZoneLabel = null;
   filterText = "";
 
+  // Fetch settings from backend; fall back to defaults on failure
+  try {
+    const settingsResp: IpcResponse = await invoke("mux_get_settings");
+    if (settingsResp.ok && settingsResp.data) {
+      const s = JSON.parse(settingsResp.data);
+      if (typeof s.search_max_rows === "number") {
+        searchMaxRows = s.search_max_rows;
+      }
+      if (typeof s.zone_max_width === "number") {
+        document.documentElement.style.setProperty(
+          "--zone-max-width",
+          s.zone_max_width + "px",
+        );
+      }
+    }
+  } catch {
+    // IPC not available — keep defaults
+  }
+
   const app = document.querySelector<HTMLDivElement>("#app")!;
   app.innerHTML = "";
 
@@ -612,7 +614,7 @@ async function buildOverlay(): Promise<void> {
     if (e.key === "ArrowDown") {
       e.preventDefault();
       if (spotlightDropdown && spotlightDropdown.style.display !== "none") {
-        const maxIndex = Math.min(spotlightItems.length, SEARCH_MAX_ROWS) - 1;
+        const maxIndex = Math.min(spotlightItems.length, searchMaxRows) - 1;
         setSpotlightSelection(Math.min(spotlightSelectedIndex + 1, maxIndex));
       }
     } else if (e.key === "ArrowUp") {

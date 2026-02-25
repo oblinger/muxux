@@ -1,5 +1,6 @@
 use crate::command::Command;
-use crate::infrastructure::tmux::TmuxCommandBuilder;
+use crate::infrastructure::tmux::{TmuxCommandBuilder, parse_list_sessions};
+use crate::types::config::MuxSettings;
 use cmx_utils::response::{Action, Direction, Response};
 
 
@@ -7,15 +8,26 @@ use cmx_utils::response::{Action, Direction, Response};
 pub struct Sys {
     project_root: String,
     actions: Vec<Action>,
+    settings: MuxSettings,
 }
 
 
 impl Sys {
     pub fn new(project_root: String) -> Sys {
+        let settings = MuxSettings {
+            project_root: project_root.clone(),
+            ..MuxSettings::default()
+        };
         Sys {
             project_root,
             actions: Vec::new(),
+            settings,
         }
+    }
+
+    /// Return a reference to the current settings.
+    pub fn settings(&self) -> &MuxSettings {
+        &self.settings
     }
 
     /// The single dispatch method.
@@ -23,6 +35,7 @@ impl Sys {
         self.actions.clear();
         match cmd {
             Command::Status { format } => self.cmd_status(format),
+            Command::SessionList => self.cmd_session_list(),
             Command::View { name } => self.cmd_view(name),
             Command::LayoutRow { session, percent } => self.cmd_layout_row(session, percent),
             Command::LayoutColumn { session, percent } => self.cmd_layout_column(session, percent),
@@ -65,6 +78,31 @@ impl Sys {
     fn cmd_status(&self, _format: Option<String>) -> Response {
         Response::Ok {
             output: "MuxUX status: running".into(),
+        }
+    }
+
+    fn cmd_session_list(&self) -> Response {
+        let output = std::process::Command::new("tmux")
+            .args(["list-sessions", "-F", "#{session_name}"])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let raw = String::from_utf8_lossy(&out.stdout);
+                let names = parse_list_sessions(&raw);
+                let json_array: Vec<serde_json::Value> = names
+                    .into_iter()
+                    .map(|n| serde_json::json!({ "name": n }))
+                    .collect();
+                Response::Ok {
+                    output: serde_json::Value::Array(json_array).to_string(),
+                }
+            }
+            Ok(_) => Response::Ok {
+                output: "[]".into(),
+            },
+            Err(_) => Response::Ok {
+                output: "[]".into(),
+            },
         }
     }
 
@@ -196,6 +234,25 @@ impl Sys {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_list_returns_json_array() {
+        let mut sys = Sys::new("/tmp".into());
+        let resp = sys.execute(Command::SessionList);
+        match resp {
+            Response::Ok { output } => {
+                // Output must be valid JSON array
+                let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+                assert!(parsed.is_array());
+                // Each element (if any) must have a "name" field
+                for entry in parsed.as_array().unwrap() {
+                    assert!(entry.get("name").is_some());
+                    assert!(entry["name"].is_string());
+                }
+            }
+            Response::Error { message } => panic!("Unexpected error: {}", message),
+        }
+    }
 
     #[test]
     fn layout_row_emits_action() {
