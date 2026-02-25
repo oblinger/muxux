@@ -312,30 +312,40 @@ fn hotkey_toggle_overlay(handle: &tauri::AppHandle) {
     let overlay: tauri::State<OverlayState> = handle.state();
 
     if overlay.is_visible() {
-        // Currently visible — hide it
+        eprintln!("[muxux] toggle: hiding overlay");
         overlay.hide();
         if let Some(window) = handle.get_webview_window("main") {
             let _ = window.hide();
         }
     } else {
-        // Query tmux for the active pane
         let pane_id = query_tmux_pane_id().unwrap_or_default();
+        eprintln!("[muxux] toggle: showing overlay for pane '{}'", pane_id);
         overlay.show(pane_id);
 
-        if let Some(window) = handle.get_webview_window("main") {
-            // Phase 1: center on screen rather than mapping pane coordinates.
-            // We use the monitor's center as a reasonable default.
-            if let Some(monitor) = window.current_monitor().ok().flatten() {
-                let size = monitor.size();
-                let pos = monitor.position();
-                let win_w = 400_i32;
-                let win_h = 400_i32;
-                let cx = pos.x + (size.width as i32 - win_w) / 2;
-                let cy = pos.y + (size.height as i32 - win_h) / 2;
-                let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+        match handle.get_webview_window("main") {
+            Some(window) => {
+                if let Some(monitor) = window.current_monitor().ok().flatten() {
+                    let size = monitor.size();
+                    let pos = monitor.position();
+                    let win_w = 400_i32;
+                    let win_h = 400_i32;
+                    let cx = pos.x + (size.width as i32 - win_w) / 2;
+                    let cy = pos.y + (size.height as i32 - win_h) / 2;
+                    eprintln!("[muxux] positioning at ({}, {}), monitor {}x{}", cx, cy, size.width, size.height);
+                    let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+                } else {
+                    eprintln!("[muxux] WARNING: no monitor found");
+                }
+                match window.show() {
+                    Ok(_) => eprintln!("[muxux] window.show() succeeded"),
+                    Err(e) => eprintln!("[muxux] window.show() FAILED: {}", e),
+                }
+                match window.set_focus() {
+                    Ok(_) => eprintln!("[muxux] window.set_focus() succeeded"),
+                    Err(e) => eprintln!("[muxux] window.set_focus() FAILED: {}", e),
+                }
             }
-            let _ = window.show();
-            let _ = window.set_focus();
+            None => eprintln!("[muxux] ERROR: no window named 'main' found"),
         }
     }
 }
@@ -398,6 +408,8 @@ pub fn run() {
                 use tauri::tray::TrayIconBuilder;
                 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 
+                eprintln!("[muxux] setting up tray icon...");
+
                 let show_item = MenuItemBuilder::with_id(
                     tray_menu_ids::SHOW, "Show MuxUX",
                 ).build(app)?;
@@ -421,6 +433,9 @@ pub fn run() {
                     .build()?;
 
                 let handle_for_tray = app.handle().clone();
+                let has_icon = app.default_window_icon().is_some();
+                eprintln!("[muxux] default_window_icon present: {}", has_icon);
+
                 let mut builder = TrayIconBuilder::new()
                     .title("MuxUX")
                     .tooltip("MuxUX — Structure App")
@@ -430,6 +445,7 @@ pub fn run() {
                 }
                 let _tray = builder
                     .on_menu_event(move |_app, event| {
+                        eprintln!("[muxux] tray menu event: {:?}", event.id());
                         match event.id().as_ref() {
                             tray_menu_ids::SHOW => {
                                 hotkey_toggle_overlay(&handle_for_tray);
@@ -457,10 +473,12 @@ pub fn run() {
                     Code::Space,
                 );
 
+                eprintln!("[muxux] registering global shortcut Ctrl+Shift+Space...");
                 let handle = app.handle().clone();
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
                         .with_handler(move |_app, fired, event| {
+                            eprintln!("[muxux] shortcut event: {:?} state={:?}", fired, event.state());
                             if fired == &shortcut
                                 && matches!(event.state(), ShortcutState::Pressed)
                             {
@@ -470,9 +488,13 @@ pub fn run() {
                         .build(),
                 )?;
 
-                app.global_shortcut().register(shortcut)?;
+                match app.global_shortcut().register(shortcut) {
+                    Ok(_) => eprintln!("[muxux] shortcut registered successfully"),
+                    Err(e) => eprintln!("[muxux] shortcut registration FAILED: {}", e),
+                }
             }
 
+            eprintln!("[muxux] setup complete");
             Ok(())
         })
         .run(tauri::generate_context!())
