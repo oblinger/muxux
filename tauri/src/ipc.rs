@@ -374,8 +374,11 @@ pub fn mux_toggle_overlay(
         eprintln!("[muxux-ipc] mux_toggle_overlay: pane_id={}", pane_id);
         overlay.show(pane_id.clone());
 
-        // Center on monitor
-        if let Some(monitor) = window.current_monitor().ok().flatten() {
+        // Center on cursor via CoreGraphics
+        let half = crate::OVERLAY_SIZE / 2;
+        if let Some((mx, my)) = crate::get_mouse_position() {
+            let _ = window.set_position(tauri::PhysicalPosition::new(mx - half, my - half));
+        } else if let Some(monitor) = window.current_monitor().ok().flatten() {
             let size = monitor.size();
             let pos = monitor.position();
             let cx = pos.x + (size.width as i32 - crate::OVERLAY_SIZE) / 2;

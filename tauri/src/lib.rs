@@ -126,6 +126,38 @@ pub struct TmuxPaneInfo {
 }
 
 
+/// Get the current mouse cursor position using CoreGraphics (macOS).
+///
+/// Uses `CGEventCreate(NULL)` + `CGEventGetLocation` which is fast, doesn't
+/// require window focus, and doesn't need accessibility permissions.
+#[cfg(target_os = "macos")]
+pub fn get_mouse_position() -> Option<(i32, i32)> {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGPoint { x: f64, y: f64 }
+
+    extern "C" {
+        fn CGEventCreate(source: *const c_void) -> *const c_void;
+        fn CGEventGetLocation(event: *const c_void) -> CGPoint;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    unsafe {
+        let event = CGEventCreate(std::ptr::null());
+        if event.is_null() { return None; }
+        let loc = CGEventGetLocation(event);
+        CFRelease(event);
+        Some((loc.x as i32, loc.y as i32))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn get_mouse_position() -> Option<(i32, i32)> {
+    None
+}
+
 /// Query tmux for the current pane ID.
 ///
 /// Runs `tmux display-message -p '#{pane_id}'` and returns the trimmed output,
@@ -655,16 +687,22 @@ fn hotkey_toggle_overlay(handle: &tauri::AppHandle) {
 
         match handle.get_webview_window("main") {
             Some(window) => {
-                // Center overlay on monitor (hotkey doesn't have cursor context)
-                if let Some(monitor) = window.current_monitor().ok().flatten() {
+                // Center overlay on cursor position via CoreGraphics
+                let half = OVERLAY_SIZE / 2;
+                if let Some((mx, my)) = get_mouse_position() {
+                    let cx = mx - half;
+                    let cy = my - half;
+                    eprintln!("[muxux] hotkey: cursor=({},{}) window_topleft=({},{})", mx, my, cx, cy);
+                    let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+                } else if let Some(monitor) = window.current_monitor().ok().flatten() {
                     let size = monitor.size();
                     let pos = monitor.position();
                     let cx = pos.x + (size.width as i32 - OVERLAY_SIZE) / 2;
                     let cy = pos.y + (size.height as i32 - OVERLAY_SIZE) / 2;
-                    eprintln!("[muxux] hotkey: centering on monitor at ({}, {}), size {}x{}", cx, cy, size.width, size.height);
+                    eprintln!("[muxux] hotkey: no cursor, monitor center ({},{})", cx, cy);
                     let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
                 } else {
-                    eprintln!("[muxux] WARNING: no monitor found");
+                    eprintln!("[muxux] WARNING: no cursor or monitor found");
                 }
                 match window.show() {
                     Ok(_) => eprintln!("[muxux] window.show() succeeded"),
