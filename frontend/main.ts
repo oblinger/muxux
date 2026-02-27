@@ -140,6 +140,7 @@ const STATIC_ZONES: ZoneConfig[] = [
         ],
       },
       { text: "Detach", action: "layout.break_pane" },
+      { text: "Capture", action: "layout.capture_save" },
     ],
   },
 ];
@@ -339,6 +340,17 @@ async function executeAction(action: string, param?: string): Promise<void> {
       await invoke("mux_parts_place", { part: param ?? "" });
       await invoke("mux_hide_overlay");
       break;
+
+    case "layout.capture_save": {
+      // Prompt for a name, then capture and save
+      const name = prompt("Save layout as:");
+      if (name) {
+        await invoke("mux_layout_capture_save", { name });
+        showFlashToast(`Layout '${name}' saved`);
+      }
+      await invoke("mux_hide_overlay");
+      break;
+    }
 
     case "submenu":
       // Sub-menu items handle their own clicks via children

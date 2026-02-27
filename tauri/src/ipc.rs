@@ -245,6 +245,40 @@ pub fn mux_template_apply(
 
 
 // ---------------------------------------------------------------------------
+// Layout capture (Phase 5)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn mux_layout_capture_live(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+    session: Option<String>,
+) -> IpcResponse {
+    // Use overlay target pane's session, or the provided session name
+    let target = session.unwrap_or_else(|| {
+        overlay
+            .get_target_pane()
+            .unwrap_or_else(|| "0".to_string())
+    });
+    to_ipc(state.layout_capture_live(&target))
+}
+
+#[tauri::command]
+pub fn mux_layout_capture_save(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+    name: String,
+    session: Option<String>,
+) -> IpcResponse {
+    let target = session.unwrap_or_else(|| {
+        overlay
+            .get_target_pane()
+            .unwrap_or_else(|| "0".to_string())
+    });
+    to_ipc(state.layout_capture_save(&target, &name))
+}
+
+// ---------------------------------------------------------------------------
 // Parts catalog (Phase 4)
 // ---------------------------------------------------------------------------
 

@@ -28,6 +28,27 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 
+/// Get home directory.
+fn dirs_next_home() -> Option<std::path::PathBuf> {
+    std::env::var("HOME").ok().map(std::path::PathBuf::from)
+}
+
+/// Append text to a file, creating it and parent directories if needed.
+fn append_to_file(path: &std::path::Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create directory: {}", e))?;
+    }
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("cannot open {}: {}", path.display(), e))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("write error: {}", e))
+}
+
 /// Menu item IDs used by the tray icon menu.
 ///
 /// Exposed as constants so they can be tested and referenced consistently.
@@ -429,6 +450,75 @@ impl AppState {
     }
 
     // -------------------------------------------------------------------
+    // Layout capture (Phase 5)
+    // -------------------------------------------------------------------
+
+    /// Capture the current layout of a session and return the layout expression.
+    pub fn layout_capture_live(&self, session: &str) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        let list_cmd = builder.list_panes(session);
+        let runner = ShellRunner;
+        match runner.run(&list_cmd) {
+            Ok(output) => {
+                use muxux_core::layout::capture::capture_session;
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                match capture_session(session, &output, None, now_ms) {
+                    Ok(result) => Response::Ok {
+                        output: serde_json::json!({
+                            "session": result.session,
+                            "layout_expr": result.layout_expr,
+                        })
+                        .to_string(),
+                    },
+                    Err(e) => Response::Error { message: e },
+                }
+            }
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    /// Capture the current layout and save it as a named part in parts.md.
+    pub fn layout_capture_save(&self, session: &str, name: &str) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        let list_cmd = builder.list_panes(session);
+        let runner = ShellRunner;
+        match runner.run(&list_cmd) {
+            Ok(output) => {
+                use muxux_core::layout::capture::capture_session;
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                match capture_session(session, &output, None, now_ms) {
+                    Ok(result) => {
+                        // Write to parts.md
+                        let parts_path = dirs_next_home()
+                            .map(|h| h.join(".config/skd/skd-library/parts.md"))
+                            .unwrap_or_default();
+                        let entry = format!("\n## {}\n{}\n", name, result.layout_expr);
+                        match append_to_file(&parts_path, &entry) {
+                            Ok(_) => Response::Ok {
+                                output: format!(
+                                    "Layout '{}' saved: {}",
+                                    name, result.layout_expr
+                                ),
+                            },
+                            Err(e) => Response::Error {
+                                message: format!("Capture succeeded but save failed: {}", e),
+                            },
+                        }
+                    }
+                    Err(e) => Response::Error { message: e },
+                }
+            }
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    // -------------------------------------------------------------------
     // Parts catalog (Phase 4)
     // -------------------------------------------------------------------
 
@@ -705,6 +795,9 @@ pub fn run() {
             ipc::mux_session_switch,
             // Templates (Phase 3)
             ipc::mux_template_apply,
+            // Layout capture (Phase 5)
+            ipc::mux_layout_capture_live,
+            ipc::mux_layout_capture_save,
             // Parts catalog (Phase 4)
             ipc::mux_parts_list,
             ipc::mux_parts_place,
