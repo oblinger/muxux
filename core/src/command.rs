@@ -118,6 +118,13 @@ pub enum Command {
 
     #[serde(rename = "setup.unhook")]
     RemoveHook,
+
+    // -----------------------------------------------------------------
+    // Parts catalog
+    // -----------------------------------------------------------------
+
+    #[serde(rename = "parts.list")]
+    PartsList,
 }
 
 
@@ -203,6 +210,15 @@ mod tests {
         let cmd = Command::RemoveHook;
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"command\":\"setup.unhook\""));
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn parts_list_round_trip() {
+        let cmd = Command::PartsList;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"command\":\"parts.list\""));
         let back: Command = serde_json::from_str(&json).unwrap();
         assert_eq!(back, cmd);
     }

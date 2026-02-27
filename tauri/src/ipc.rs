@@ -245,6 +245,25 @@ pub fn mux_template_apply(
 
 
 // ---------------------------------------------------------------------------
+// Parts catalog (Phase 4)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn mux_parts_list(state: State<'_, AppState>) -> IpcResponse {
+    to_ipc(state.parts_list())
+}
+
+#[tauri::command]
+pub fn mux_parts_place(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+    part: String,
+) -> IpcResponse {
+    let pane = overlay.get_target_pane().unwrap_or_default();
+    to_ipc(state.parts_place(&pane, &part))
+}
+
+// ---------------------------------------------------------------------------
 // Overlay commands
 // ---------------------------------------------------------------------------
 

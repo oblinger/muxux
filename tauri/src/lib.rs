@@ -429,6 +429,48 @@ impl AppState {
     }
 
     // -------------------------------------------------------------------
+    // Parts catalog (Phase 4)
+    // -------------------------------------------------------------------
+
+    pub fn parts_list(&self) -> Response {
+        self.execute(Command::PartsList)
+    }
+
+    /// Place a part from the catalog into the target pane.
+    ///
+    /// Looks up the part in the registry, expands it recursively, and
+    /// applies the resulting layout via realize_layout().
+    pub fn parts_place(&self, pane: &str, part_name: &str) -> Response {
+        let registry = muxux_core::data::parts::PartRegistry::from_default_path();
+        match registry.expand(part_name) {
+            Some(layout) => {
+                let commands = realize_layout(pane, &layout);
+                let runner = ShellRunner;
+                for cmd in &commands {
+                    match runner.run(cmd) {
+                        Ok(_) => eprintln!("[muxux] part cmd: {}", cmd),
+                        Err(e) => {
+                            return Response::Error {
+                                message: format!("Part '{}' failed: {}", part_name, e),
+                            };
+                        }
+                    }
+                }
+                Response::Ok {
+                    output: format!(
+                        "Part '{}' applied ({} splits)",
+                        part_name,
+                        commands.len()
+                    ),
+                }
+            }
+            None => Response::Error {
+                message: format!("Part '{}' not found in catalog", part_name),
+            },
+        }
+    }
+
+    // -------------------------------------------------------------------
     // Templates (Phase 3)
     // -------------------------------------------------------------------
 
@@ -663,6 +705,9 @@ pub fn run() {
             ipc::mux_session_switch,
             // Templates (Phase 3)
             ipc::mux_template_apply,
+            // Parts catalog (Phase 4)
+            ipc::mux_parts_list,
+            ipc::mux_parts_place,
             // Overlay
             ipc::mux_show_overlay,
             ipc::mux_hide_overlay,

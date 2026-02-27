@@ -93,19 +93,24 @@ const STATIC_ZONES: ZoneConfig[] = [
     label: "Catalog",
     items: [
       {
-        text: "Projects \u25B8",
+        text: "Agents \u25B8",
         action: "submenu",
         children: [
-          { text: "P1", action: "unimplemented" },
-          { text: "P2", action: "unimplemented" },
-          { text: "P3", action: "unimplemented" },
+          { text: "(loading...)", action: "unimplemented" },
         ],
       },
       {
-        text: "Recent \u25B8",
+        text: "Compositions \u25B8",
         action: "submenu",
         children: [
-          { text: "(no recent items)", action: "unimplemented" },
+          { text: "(loading...)", action: "unimplemented" },
+        ],
+      },
+      {
+        text: "Sessions \u25B8",
+        action: "submenu",
+        children: [
+          { text: "(loading...)", action: "unimplemented" },
         ],
       },
       {
@@ -330,6 +335,11 @@ async function executeAction(action: string, param?: string): Promise<void> {
       await invoke("mux_hide_overlay");
       break;
 
+    case "parts.place":
+      await invoke("mux_parts_place", { part: param ?? "" });
+      await invoke("mux_hide_overlay");
+      break;
+
     case "submenu":
       // Sub-menu items handle their own clicks via children
       // Parent item click does nothing
@@ -395,6 +405,79 @@ async function fetchSessionNames(): Promise<string[]> {
     // IPC not available (e.g., running outside Tauri)
   }
   return [];
+}
+
+// ---------------------------------------------------------------------------
+// Fetch parts catalog from IPC
+// ---------------------------------------------------------------------------
+interface PartsCatalog {
+  agents: { name: string; role?: string }[];
+  compositions: { name: string }[];
+  sessions: { name: string }[];
+}
+
+async function fetchPartsCatalog(): Promise<PartsCatalog | null> {
+  try {
+    const resp: IpcResponse = await invoke("mux_parts_list");
+    if (resp.ok && resp.data) {
+      return JSON.parse(resp.data) as PartsCatalog;
+    }
+  } catch {
+    // IPC not available
+  }
+  return null;
+}
+
+function populateCatalogZone(catalog: PartsCatalog): void {
+  const app = document.querySelector<HTMLDivElement>("#app");
+  if (!app) return;
+
+  const downZone = app.querySelector<HTMLDivElement>(".zone-down");
+  if (!downZone) return;
+
+  // Find the Agents, Compositions, and Sessions sub-menus
+  const subMenus = downZone.querySelectorAll<HTMLDivElement>(".zone-item.has-submenu");
+  subMenus.forEach((menuItem) => {
+    const label = menuItem.childNodes[0]?.textContent?.trim() || "";
+    const subPanel = menuItem.querySelector<HTMLDivElement>(".sub-panel");
+    if (!subPanel) return;
+
+    let items: { name: string }[] = [];
+    if (label.startsWith("Agents")) {
+      items = catalog.agents;
+    } else if (label.startsWith("Compositions")) {
+      items = catalog.compositions;
+    } else if (label.startsWith("Sessions")) {
+      items = catalog.sessions;
+    } else {
+      return; // Templates — leave as-is
+    }
+
+    // Clear placeholder children
+    subPanel.innerHTML = "";
+
+    if (items.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "zone-item sub-item";
+      empty.textContent = "(none)";
+      empty.dataset.action = "unimplemented";
+      subPanel.appendChild(empty);
+      return;
+    }
+
+    items.forEach((part) => {
+      const childEl = document.createElement("div");
+      childEl.className = "zone-item sub-item";
+      childEl.textContent = part.name;
+      childEl.dataset.action = "parts.place";
+      childEl.dataset.param = part.name;
+      childEl.addEventListener("click", (e: MouseEvent) => {
+        e.stopPropagation();
+        handleItemClick(childEl);
+      });
+      subPanel.appendChild(childEl);
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -872,6 +955,13 @@ async function buildOverlay(): Promise<void> {
       e.stopPropagation();
       handleItemClick(item);
     });
+  });
+
+  // Populate catalog zone with parts from backend (non-blocking)
+  fetchPartsCatalog().then((catalog) => {
+    if (catalog) {
+      populateCatalogZone(catalog);
+    }
   });
 
   // Cache natural border-box widths of L/R zones (after layout)

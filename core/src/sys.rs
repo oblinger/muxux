@@ -58,6 +58,7 @@ impl Sys {
             Command::Studio { pane, x, y } => self.cmd_studio(pane, x, y),
             Command::SetupHook => self.cmd_setup_hook(),
             Command::RemoveHook => self.cmd_remove_hook(),
+            Command::PartsList => self.cmd_parts_list(),
         }
     }
 
@@ -216,6 +217,17 @@ impl Sys {
         let builder = TmuxCommandBuilder::new();
         Response::Ok {
             output: builder.unbind_mouse_hook(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Parts catalog
+    // -----------------------------------------------------------------------
+
+    fn cmd_parts_list(&self) -> Response {
+        let registry = crate::data::parts::PartRegistry::from_default_path();
+        Response::Ok {
+            output: registry.to_json(),
         }
     }
 
