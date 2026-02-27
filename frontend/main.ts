@@ -1142,6 +1142,13 @@ document.addEventListener("mousemove", (e: MouseEvent) => {
   const contentDist = distToNearestContent(e.clientX, e.clientY);
   const overContent = contentDist === 0;
 
+  // Log mouse vs center on first few moves (throttled)
+  if (!("_logCount" in document)) (document as any)._logCount = 0;
+  if ((document as any)._logCount < 5 || (document as any)._logCount % 50 === 0) {
+    console.log(`[mux-pos] mouse: clientX=${e.clientX} clientY=${e.clientY} local=(${Math.round(mx)},${Math.round(my)}) center=(${CENTER},${CENTER}) contentDist=${Math.round(contentDist)}`);
+  }
+  (document as any)._logCount++;
+
   if (mousePhase === "pristine") {
     if (overContent || contentDist < DISMISS_MARGIN) {
       const prev = mousePhase;
@@ -1215,6 +1222,15 @@ const currentWindow = getCurrentWindow();
 currentWindow.onFocusChanged(async ({ payload: focused }) => {
   console.log(`[mux-mouse] focus-change: focused=${focused} phase=${mousePhase}`);
   if (focused) {
+    // Log the window position and center for debugging
+    const appEl = document.querySelector<HTMLDivElement>("#app");
+    if (appEl) {
+      const appRect = appEl.getBoundingClientRect();
+      console.log(`[mux-pos] window: left=${Math.round(appRect.left)} top=${Math.round(appRect.top)} w=${Math.round(appRect.width)} h=${Math.round(appRect.height)}`);
+      console.log(`[mux-pos] center: x=${Math.round(appRect.left + appRect.width/2)} y=${Math.round(appRect.top + appRect.height/2)}`);
+      console.log(`[mux-pos] screenX=${window.screenX} screenY=${window.screenY} outerW=${window.outerWidth} outerH=${window.outerHeight}`);
+      console.log(`[mux-pos] CENTER const=${CENTER} APP_SIZE=${APP_SIZE}`);
+    }
     lastFocusGained = Date.now();
     if (focusLossTimer !== null) {
       clearTimeout(focusLossTimer);

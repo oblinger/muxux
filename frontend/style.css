@@ -181,6 +181,10 @@ html, body {
   background: rgba(255, 255, 255, 0.08);
   color: #f6f6f6;
   font-size: 13px;
+  line-height: 1.2;
+  height: auto;
+  max-height: 32px;
+  box-sizing: border-box;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
