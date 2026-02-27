@@ -655,17 +655,29 @@ fn hotkey_toggle_overlay(handle: &tauri::AppHandle) {
 
         match handle.get_webview_window("main") {
             Some(window) => {
-                if let Some(monitor) = window.current_monitor().ok().flatten() {
-                    let size = monitor.size();
-                    let pos = monitor.position();
-                    let win_w = OVERLAY_SIZE;
-                    let win_h = OVERLAY_SIZE;
-                    let cx = pos.x + (size.width as i32 - win_w) / 2;
-                    let cy = pos.y + (size.height as i32 - win_h) / 2;
-                    eprintln!("[muxux] positioning at ({}, {}), monitor {}x{}", cx, cy, size.width, size.height);
-                    let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
-                } else {
-                    eprintln!("[muxux] WARNING: no monitor found");
+                // Center overlay on the cursor position
+                let half = OVERLAY_SIZE / 2;
+                match window.cursor_position() {
+                    Ok(cursor) => {
+                        let cx = cursor.x as i32 - half;
+                        let cy = cursor.y as i32 - half;
+                        eprintln!("[muxux] centering on cursor ({}, {}), window at ({}, {})",
+                            cursor.x as i32, cursor.y as i32, cx, cy);
+                        let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+                    }
+                    Err(_) => {
+                        // Fallback: center on monitor
+                        if let Some(monitor) = window.current_monitor().ok().flatten() {
+                            let size = monitor.size();
+                            let pos = monitor.position();
+                            let cx = pos.x + (size.width as i32 - OVERLAY_SIZE) / 2;
+                            let cy = pos.y + (size.height as i32 - OVERLAY_SIZE) / 2;
+                            eprintln!("[muxux] cursor unavailable, centering on monitor at ({}, {})", cx, cy);
+                            let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+                        } else {
+                            eprintln!("[muxux] WARNING: no cursor or monitor found");
+                        }
+                    }
                 }
                 match window.show() {
                     Ok(_) => eprintln!("[muxux] window.show() succeeded"),

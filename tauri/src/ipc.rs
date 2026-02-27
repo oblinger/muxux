@@ -329,12 +329,8 @@ pub fn mux_show_overlay(
     pane_id: String,
 ) -> IpcResponse {
     overlay.show(pane_id.clone());
-    // Center the overlay on the given coordinates
-    let half = crate::OVERLAY_SIZE / 2;
-    let cx = x - half;
-    let cy = y - half;
-    eprintln!("[muxux-ipc] mux_show_overlay: centering at ({},{}) for pane {}", x, y, pane_id);
-    let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+    eprintln!("[muxux-ipc] mux_show_overlay: positioning at ({},{}) for pane {}", x, y, pane_id);
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
     let _ = window.show();
     let _ = window.set_focus();
     IpcResponse::success(format!("overlay shown at ({}, {}) for pane {}", x, y, pane_id))
@@ -378,13 +374,23 @@ pub fn mux_toggle_overlay(
         eprintln!("[muxux-ipc] mux_toggle_overlay: pane_id={}", pane_id);
         overlay.show(pane_id.clone());
 
-        // Center on screen
-        if let Some(monitor) = window.current_monitor().ok().flatten() {
-            let size = monitor.size();
-            let pos = monitor.position();
-            let cx = pos.x + (size.width as i32 - crate::OVERLAY_SIZE) / 2;
-            let cy = pos.y + (size.height as i32 - crate::OVERLAY_SIZE) / 2;
-            let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+        // Center on cursor
+        let half = crate::OVERLAY_SIZE / 2;
+        match window.cursor_position() {
+            Ok(cursor) => {
+                let cx = cursor.x as i32 - half;
+                let cy = cursor.y as i32 - half;
+                let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+            }
+            Err(_) => {
+                if let Some(monitor) = window.current_monitor().ok().flatten() {
+                    let size = monitor.size();
+                    let pos = monitor.position();
+                    let cx = pos.x + (size.width as i32 - crate::OVERLAY_SIZE) / 2;
+                    let cy = pos.y + (size.height as i32 - crate::OVERLAY_SIZE) / 2;
+                    let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+                }
+            }
         }
         let _ = window.show();
         let _ = window.set_focus();
@@ -409,14 +415,9 @@ pub fn mux_summon_overlay(
     eprintln!("[muxux-ipc] mux_summon_overlay: pane_id={} at ({},{})", pane_id, x, y);
     overlay.show(pane_id.clone());
 
-    // Center the overlay on the given coordinates
-    let half = crate::OVERLAY_SIZE / 2;
-    let cx = x - half;
-    let cy = y - half;
-
     match app.get_webview_window("main") {
         Some(window) => {
-            let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
             let _ = window.show();
             let _ = window.set_focus();
             IpcResponse::success(format!("overlay summoned at ({}, {}) for pane {}", x, y, pane_id))

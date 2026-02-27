@@ -1006,6 +1006,21 @@ async function buildOverlay(): Promise<void> {
     const rightZone = app.querySelector<HTMLDivElement>(".zone-right");
     if (leftZone) lrNatural.left = leftZone.offsetWidth;
     if (rightZone) lrNatural.right = rightZone.offsetWidth;
+
+    // Diagnostic: log every zone-item's pixel dimensions
+    const allZoneItems = app.querySelectorAll<HTMLDivElement>(".zone-item:not(.sub-item)");
+    allZoneItems.forEach((item) => {
+      const r = item.getBoundingClientRect();
+      const zone = item.closest(".zone");
+      const zoneClass = zone ? zone.className.replace("zone ", "") : "?";
+      console.log(`[mux-diag] item="${item.textContent?.trim()}" zone=${zoneClass} w=${Math.round(r.width)} h=${Math.round(r.height)}`);
+    });
+    // Also log zone dimensions
+    const allZones = app.querySelectorAll<HTMLDivElement>(".zone");
+    allZones.forEach((zone) => {
+      const r = zone.getBoundingClientRect();
+      console.log(`[mux-diag] zone=${zone.className} w=${Math.round(r.width)} h=${Math.round(r.height)}`);
+    });
   });
 }
 
