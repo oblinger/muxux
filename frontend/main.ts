@@ -27,6 +27,7 @@ interface ZoneConfig {
 }
 
 const BRICK_THRESHOLD = 6;
+const LR_PUSH = 80; // must match CSS --lr-push
 
 const ZONE_LABELS: Record<string, string> = {
   s: "Sessions",
@@ -56,8 +57,12 @@ interface SearchableItem {
 
 const DEFAULT_SEARCH_MAX_ROWS = 10;
 const DEFAULT_ZONE_MAX_WIDTH = 160;
+const DEFAULT_LR_SLIDE_START = 5;
+const DEFAULT_LR_SLIDE_FULL = 40;
 
 let searchMaxRows = DEFAULT_SEARCH_MAX_ROWS;
+let lrSlideStart = DEFAULT_LR_SLIDE_START;
+let lrSlideFull = DEFAULT_LR_SLIDE_FULL;
 
 let spotlightDropdown: HTMLDivElement | null = null;
 let spotlightItems: SearchableItem[] = [];
@@ -70,8 +75,17 @@ const STATIC_ZONES: ZoneConfig[] = [
     items: [
       { text: "+Row", action: "layout.row" },
       { text: "+Col", action: "layout.column" },
-      { text: "Resize", action: "unimplemented" },
-      { text: "Even Out", action: "unimplemented" },
+      {
+        text: "Resize \u25B8",
+        action: "submenu",
+        children: [
+          { text: "Grow Left", action: "layout.resize", param: "left" },
+          { text: "Grow Right", action: "layout.resize", param: "right" },
+          { text: "Grow Up", action: "layout.resize", param: "up" },
+          { text: "Grow Down", action: "layout.resize", param: "down" },
+        ],
+      },
+      { text: "Even Out", action: "layout.even_out" },
     ],
   },
   {
@@ -82,8 +96,9 @@ const STATIC_ZONES: ZoneConfig[] = [
         text: "Projects \u25B8",
         action: "submenu",
         children: [
-          { text: "New Project", action: "unimplemented" },
-          { text: "Import", action: "unimplemented" },
+          { text: "P1", action: "unimplemented" },
+          { text: "P2", action: "unimplemented" },
+          { text: "P3", action: "unimplemented" },
         ],
       },
       {
@@ -97,10 +112,10 @@ const STATIC_ZONES: ZoneConfig[] = [
         text: "Templates \u25B8",
         action: "submenu",
         children: [
-          { text: "2-Col", action: "unimplemented", icon: "2-col" },
-          { text: "3-Col", action: "unimplemented", icon: "3-col" },
-          { text: "2-Row", action: "unimplemented", icon: "2-row" },
-          { text: "Dashboard", action: "unimplemented", icon: "dashboard" },
+          { text: "2-Col", action: "template.apply", param: "2-col", icon: "2-col" },
+          { text: "3-Col", action: "template.apply", param: "3-col", icon: "3-col" },
+          { text: "2-Row", action: "template.apply", param: "2-row", icon: "2-row" },
+          { text: "Dashboard", action: "template.apply", param: "dashboard", icon: "dashboard" },
         ],
       },
     ],
@@ -109,10 +124,17 @@ const STATIC_ZONES: ZoneConfig[] = [
     direction: "left",
     label: "Modify",
     items: [
-      { text: "Delete", action: "unimplemented" },
+      { text: "Delete", action: "layout.kill_pane" },
       { text: "Merge", action: "layout.merge" },
-      { text: "Swap", action: "unimplemented" },
-      { text: "Detach", action: "unimplemented" },
+      {
+        text: "Swap \u25B8",
+        action: "submenu",
+        children: [
+          { text: "Swap Up", action: "layout.swap_pane", param: "up" },
+          { text: "Swap Down", action: "layout.swap_pane", param: "down" },
+        ],
+      },
+      { text: "Detach", action: "layout.break_pane" },
     ],
   },
 ];
@@ -259,7 +281,7 @@ function showFlashToast(message: string): void {
 async function executeAction(action: string, param?: string): Promise<void> {
   switch (action) {
     case "session":
-      await invoke("mux_layout_session", { name: param ?? "main" });
+      await invoke("mux_session_switch", { name: param ?? "main" });
       await invoke("mux_hide_overlay");
       break;
 
@@ -275,6 +297,36 @@ async function executeAction(action: string, param?: string): Promise<void> {
 
     case "layout.merge":
       await invoke("mux_layout_merge", { session: "current" });
+      await invoke("mux_hide_overlay");
+      break;
+
+    case "layout.resize":
+      await invoke("mux_layout_resize", { direction: param ?? "right" });
+      await invoke("mux_hide_overlay");
+      break;
+
+    case "layout.even_out":
+      await invoke("mux_layout_even_out");
+      await invoke("mux_hide_overlay");
+      break;
+
+    case "layout.kill_pane":
+      await invoke("mux_layout_kill_pane");
+      await invoke("mux_hide_overlay");
+      break;
+
+    case "layout.swap_pane":
+      await invoke("mux_layout_swap_pane", { direction: param ?? "down" });
+      await invoke("mux_hide_overlay");
+      break;
+
+    case "layout.break_pane":
+      await invoke("mux_layout_break_pane");
+      await invoke("mux_hide_overlay");
+      break;
+
+    case "template.apply":
+      await invoke("mux_template_apply", { template: param ?? "2-col" });
       await invoke("mux_hide_overlay");
       break;
 
@@ -489,17 +541,25 @@ function applyFilter(inputValue: string): void {
   const zones = app.querySelectorAll<HTMLDivElement>(".zone");
 
   if (inputValue.length === 0) {
-    // No input — show all zones at full opacity, show all items
+    // No input — hide input, restore star, hand visibility back to mouse tracking
     activeZoneLabel = null;
     filterText = "";
+    const input = document.getElementById("center-input") as HTMLInputElement | null;
+    const star = document.getElementById("center-star");
+    if (input) input.style.display = "none";
+    if (star) star.style.display = "";
     zones.forEach((zone) => {
-      zone.style.opacity = "1";
       zone.style.display = "";
+      zone.style.opacity = "";
+      zone.style.pointerEvents = "auto";
       const items = zone.querySelectorAll<HTMLDivElement>(".zone-item");
       items.forEach((item) => {
         item.style.display = "";
       });
     });
+    // Reset to mouse-driven zone visibility
+    resetMousePhase();
+    setVisibleZone("all");
     hideSpotlightDropdown();
     return;
   }
@@ -521,6 +581,23 @@ function applyFilter(inputValue: string): void {
   // First char matches a zone — activate it, dim others
   activeZoneLabel = matchedLabel;
   filterText = inputValue.slice(1);
+
+  // Stretch keyboard-selected L/R zone inner edge to overlap position
+  const app2 = document.querySelector<HTMLDivElement>("#app");
+  if (app2) {
+    const leftZone = app2.querySelector<HTMLDivElement>(".zone-left");
+    const rightZone = app2.querySelector<HTMLDivElement>(".zone-right");
+    if (matchedLabel === "Modify" && leftZone) {
+      stretchZone(leftZone, "left", LR_PUSH);
+    } else if (leftZone) {
+      resetZone(leftZone, "left");
+    }
+    if (matchedLabel === "Layout" && rightZone) {
+      stretchZone(rightZone, "right", LR_PUSH);
+    } else if (rightZone) {
+      resetZone(rightZone, "right");
+    }
+  }
 
   zones.forEach((zone) => {
     const label = zone.querySelector<HTMLDivElement>(".zone-label");
@@ -561,11 +638,130 @@ function applyFilter(inputValue: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Center star indicator (shown before first keystroke)
+// ---------------------------------------------------------------------------
+function createCenterStar(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "90");
+  svg.setAttribute("height", "70");
+  svg.setAttribute("viewBox", "-45 -35 90 70");
+  svg.classList.add("center-star");
+  svg.id = "center-star";
+
+  const fill = "rgba(255,255,255,0.4)";
+
+  // Four triangular spokes pointing outward
+  // Right triangle — wide at center, point at edge
+  const right = document.createElementNS(ns, "polygon");
+  right.setAttribute("points", "10,-6 45,0 10,6");
+  right.setAttribute("fill", fill);
+  svg.appendChild(right);
+
+  // Left triangle
+  const left = document.createElementNS(ns, "polygon");
+  left.setAttribute("points", "-10,-6 -45,0 -10,6");
+  left.setAttribute("fill", fill);
+  svg.appendChild(left);
+
+  // Up triangle
+  const up = document.createElementNS(ns, "polygon");
+  up.setAttribute("points", "-5,-10 0,-35 5,-10");
+  up.setAttribute("fill", fill);
+  svg.appendChild(up);
+
+  // Down triangle
+  const down = document.createElementNS(ns, "polygon");
+  down.setAttribute("points", "-5,10 0,35 5,10");
+  down.setAttribute("fill", fill);
+  svg.appendChild(down);
+
+  // Center circle (larger)
+  const circle = document.createElementNS(ns, "circle");
+  circle.setAttribute("cx", "0");
+  circle.setAttribute("cy", "0");
+  circle.setAttribute("r", "8");
+  circle.setAttribute("fill", "rgba(255,255,255,0.45)");
+  svg.appendChild(circle);
+
+  return svg;
+}
+
+// ---------------------------------------------------------------------------
+// Left/right zone stretch helpers
+// ---------------------------------------------------------------------------
+// Natural border-box widths cached after build (box-sizing: border-box on L/R)
+const lrNatural = { left: 0, right: 0 };
+
+function stretchZone(
+  zone: HTMLDivElement,
+  side: "left" | "right",
+  stretch: number,
+): void {
+  const pushRemaining = LR_PUSH - stretch;
+  const sign = side === "left" ? -1 : 1;
+  const natural = side === "left" ? lrNatural.left : lrNatural.right;
+
+  zone.style.transform = `translateY(-50%) translateX(${sign * pushRemaining}px)`;
+  zone.style.minWidth = `${natural + stretch}px`;
+  zone.style.alignItems = stretch > 0 ? "stretch" : "";
+}
+
+function resetZone(zone: HTMLDivElement, side: "left" | "right"): void {
+  const sign = side === "left" ? -1 : 1;
+  zone.style.transform = `translateY(-50%) translateX(${sign * LR_PUSH}px)`;
+  zone.style.minWidth = "";
+  zone.style.alignItems = "";
+}
+
+function updateLRSlide(mx: number, _my: number): void {
+  const app = document.querySelector<HTMLDivElement>("#app");
+  if (!app) return;
+
+  const dx = mx - CENTER;
+  const absDx = Math.abs(dx);
+
+  if (absDx <= lrSlideStart) {
+    resetLRSlide();
+    return;
+  }
+
+  const range = lrSlideFull - lrSlideStart;
+  const t = Math.min((absDx - lrSlideStart) / range, 1);
+  const stretch = LR_PUSH * t;
+
+  const leftZone = app.querySelector<HTMLDivElement>(".zone-left");
+  const rightZone = app.querySelector<HTMLDivElement>(".zone-right");
+
+  if (dx < 0 && leftZone) {
+    stretchZone(leftZone, "left", stretch);
+  } else if (leftZone) {
+    resetZone(leftZone, "left");
+  }
+
+  if (dx > 0 && rightZone) {
+    stretchZone(rightZone, "right", stretch);
+  } else if (rightZone) {
+    resetZone(rightZone, "right");
+  }
+}
+
+function resetLRSlide(): void {
+  const app = document.querySelector<HTMLDivElement>("#app");
+  if (!app) return;
+  const leftZone = app.querySelector<HTMLDivElement>(".zone-left");
+  const rightZone = app.querySelector<HTMLDivElement>(".zone-right");
+  if (leftZone) resetZone(leftZone, "left");
+  if (rightZone) resetZone(rightZone, "right");
+}
+
+// ---------------------------------------------------------------------------
 // Build overlay UI
 // ---------------------------------------------------------------------------
 async function buildOverlay(): Promise<void> {
   activeZoneLabel = null;
   filterText = "";
+  resetMousePhase();
 
   // Fetch settings from backend; fall back to defaults on failure
   try {
@@ -581,10 +777,18 @@ async function buildOverlay(): Promise<void> {
           s.zone_max_width + "px",
         );
       }
+      if (typeof s.lr_slide_start === "number") {
+        lrSlideStart = s.lr_slide_start;
+      }
+      if (typeof s.lr_slide_full === "number") {
+        lrSlideFull = s.lr_slide_full;
+      }
     }
   } catch {
     // IPC not available — apply defaults explicitly
     searchMaxRows = DEFAULT_SEARCH_MAX_ROWS;
+    lrSlideStart = DEFAULT_LR_SLIDE_START;
+    lrSlideFull = DEFAULT_LR_SLIDE_FULL;
     document.documentElement.style.setProperty(
       "--zone-max-width",
       DEFAULT_ZONE_MAX_WIDTH + "px",
@@ -599,7 +803,11 @@ async function buildOverlay(): Promise<void> {
     // ignore — we don't use the result in Phase 1
   });
 
-  // Center input box (replaces center marker)
+  // Center star (visible initially, replaced by input on first keystroke)
+  const star = createCenterStar();
+  app.appendChild(star);
+
+  // Center input box (hidden until first keystroke)
   const input = document.createElement("input");
   input.type = "text";
   input.className = "center-input";
@@ -607,10 +815,8 @@ async function buildOverlay(): Promise<void> {
   input.autocomplete = "off";
   input.spellcheck = false;
   input.placeholder = "";
+  input.style.display = "none";
   app.appendChild(input);
-
-  // Auto-focus the input
-  input.focus();
 
   input.addEventListener("input", () => {
     applyFilter(input.value);
@@ -667,7 +873,132 @@ async function buildOverlay(): Promise<void> {
       handleItemClick(item);
     });
   });
+
+  // Cache natural border-box widths of L/R zones (after layout)
+  requestAnimationFrame(() => {
+    const leftZone = app.querySelector<HTMLDivElement>(".zone-left");
+    const rightZone = app.querySelector<HTMLDivElement>(".zone-right");
+    if (leftZone) lrNatural.left = leftZone.offsetWidth;
+    if (rightZone) lrNatural.right = rightZone.offsetWidth;
+  });
 }
+
+// ---------------------------------------------------------------------------
+// Mouse-driven zone visibility
+// ---------------------------------------------------------------------------
+const APP_SIZE = 400;
+const CENTER = APP_SIZE / 2;
+const DEADZONE = 30;      // px from center — show all zones
+const EDGE_DISMISS = 3;   // px from window edge — counts as "out of bounds"
+
+type Direction = "up" | "down" | "left" | "right";
+type ZoneVisibility = Direction | "all" | "none";
+let visibleZone: ZoneVisibility = "all";
+
+// Three-state mouse lifecycle:
+//   "pristine"  — overlay just opened, mouse hasn't entered yet, show all zones
+//   "tracking"  — mouse is inside the region, directional highlighting active
+//   "dismissed" — mouse entered then left, overlay dismissed permanently
+let mousePhase: "pristine" | "tracking" | "dismissed" = "pristine";
+
+function resetMousePhase(): void {
+  mousePhase = "pristine";
+  visibleZone = "all";
+  resetLRSlide();
+}
+
+function isInBounds(mx: number, my: number): boolean {
+  return mx >= EDGE_DISMISS && mx <= APP_SIZE - EDGE_DISMISS &&
+         my >= EDGE_DISMISS && my <= APP_SIZE - EDGE_DISMISS;
+}
+
+function directionalZone(mx: number, my: number): ZoneVisibility {
+  const dx = mx - CENTER;
+  const dy = my - CENTER;
+
+  if (Math.abs(dx) < DEADZONE && Math.abs(dy) < DEADZONE) return "all";
+
+  if (Math.abs(dx) > Math.abs(dy)) {
+    return dx > 0 ? "right" : "left";
+  } else {
+    return dy > 0 ? "down" : "up";
+  }
+}
+
+function setVisibleZone(vis: ZoneVisibility): void {
+  if (vis === visibleZone) return;
+  visibleZone = vis;
+
+  const app = document.querySelector<HTMLDivElement>("#app");
+  if (!app) return;
+
+  const zones = app.querySelectorAll<HTMLDivElement>(".zone");
+  const centerInput = document.getElementById("center-input") as HTMLElement | null;
+  const centerStar = document.getElementById("center-star") as HTMLElement | null;
+
+  if (vis === "none") {
+    zones.forEach((zone) => {
+      zone.style.opacity = "0";
+      zone.style.pointerEvents = "none";
+    });
+    if (centerInput) centerInput.style.opacity = "0";
+    if (centerStar) centerStar.style.opacity = "0";
+  } else if (vis === "all") {
+    zones.forEach((zone) => {
+      zone.style.opacity = "0.6";
+      zone.style.pointerEvents = "auto";
+    });
+    if (centerInput) centerInput.style.opacity = "1";
+    if (centerStar) centerStar.style.opacity = "1";
+  } else {
+    zones.forEach((zone) => {
+      const isMatch = zone.classList.contains(`zone-${vis}`);
+      zone.style.opacity = isMatch ? "1" : "0";
+      zone.style.pointerEvents = isMatch ? "auto" : "none";
+    });
+    if (centerInput) centerInput.style.opacity = "1";
+    if (centerStar) centerStar.style.opacity = "1";
+  }
+}
+
+document.addEventListener("mousemove", (e: MouseEvent) => {
+  // Keyboard filter active — skip mouse logic
+  const input = document.getElementById("center-input") as HTMLInputElement | null;
+  if (input && input.value.length > 0) return;
+
+  // Already dismissed — nothing to do
+  if (mousePhase === "dismissed") return;
+
+  const app = document.querySelector<HTMLDivElement>("#app");
+  if (!app) return;
+
+  const rect = app.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const inBounds = isInBounds(mx, my);
+
+  if (mousePhase === "pristine") {
+    if (inBounds) {
+      // Mouse entered — start tracking
+      mousePhase = "tracking";
+      setVisibleZone(directionalZone(mx, my));
+    }
+    // Still outside — stay pristine, show all
+    return;
+  }
+
+  // mousePhase === "tracking"
+  if (!inBounds) {
+    // Mouse left after entering — dismiss permanently
+    mousePhase = "dismissed";
+    setVisibleZone("none");
+    invoke("mux_hide_overlay");
+    return;
+  }
+
+  setVisibleZone(directionalZone(mx, my));
+  updateLRSlide(mx, my);
+});
 
 // ---------------------------------------------------------------------------
 // Dismiss handlers
@@ -680,11 +1011,69 @@ document.addEventListener("keydown", async (e: KeyboardEvent) => {
   }
 });
 
-// Dismiss the overlay when the window loses focus (click outside)
+// First printable keystroke: hide star, show input, seed with that char
+document.addEventListener("keydown", (e: KeyboardEvent) => {
+  // Ignore modifier-only, navigation, and Escape keys
+  if (e.key === "Escape" || e.key === "Tab" || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key.startsWith("Arrow") || e.key === "Shift" || e.key === "Meta" || e.key === "Control" || e.key === "Alt") return;
+
+  const input = document.getElementById("center-input") as HTMLInputElement | null;
+  if (!input) return;
+
+  // If input already visible, let it handle events normally
+  if (input.style.display !== "none") return;
+
+  const star = document.getElementById("center-star");
+
+  // Only activate on printable characters (single char keys)
+  if (e.key.length !== 1) return;
+
+  e.preventDefault();
+
+  // Hide star, show input, seed with the pressed key
+  if (star) star.style.display = "none";
+  input.style.display = "";
+  input.value = e.key;
+  input.focus();
+  applyFilter(input.value);
+});
+
+// Dismiss the overlay when the window loses focus (click outside).
+// Grace period: if focus was gained very recently (e.g. overlay was just
+// summoned from a terminal right-click), ignore the immediate focus-loss
+// that occurs when a native context menu steals focus in the caller window.
+let focusLossTimer: ReturnType<typeof setTimeout> | null = null;
+let lastFocusGained = 0;
 const currentWindow = getCurrentWindow();
 currentWindow.onFocusChanged(async ({ payload: focused }) => {
-  if (!focused) {
-    await invoke("mux_hide_overlay");
+  if (focused) {
+    lastFocusGained = Date.now();
+    if (focusLossTimer !== null) {
+      clearTimeout(focusLossTimer);
+      focusLossTimer = null;
+    }
+    // Reset overlay to fresh state when re-summoned.
+    // Without this, mousePhase stays "dismissed" from the previous
+    // session and the overlay stops responding on subsequent opens.
+    resetMousePhase();
+    // Force DOM refresh: resetMousePhase sets visibleZone="all", so
+    // setVisibleZone("all") would short-circuit. Clear it first.
+    visibleZone = "none";
+    setVisibleZone("all");
+    activeZoneLabel = null;
+    filterText = "";
+    const input = document.getElementById("center-input") as HTMLInputElement | null;
+    const star = document.getElementById("center-star");
+    if (input) { input.style.display = "none"; input.value = ""; }
+    if (star) star.style.display = "";
+    hideSpotlightDropdown();
+  } else {
+    // If we just gained focus within the last 2s, don't auto-dismiss
+    if (Date.now() - lastFocusGained < 2000) return;
+    focusLossTimer = setTimeout(async () => {
+      focusLossTimer = null;
+      await invoke("mux_hide_overlay");
+    }, 300);
   }
 });
 

@@ -19,6 +19,10 @@ pub mod ipc;
 
 use muxux_core::command::Command;
 use muxux_core::sys::Sys;
+use muxux_core::infrastructure::tmux::{TmuxBackend, TmuxCommandBuilder, realize_layout};
+use muxux_core::infrastructure::runner::{ShellRunner, CommandRunner};
+use muxux_core::infrastructure::SessionBackend;
+use muxux_core::types::session::{LayoutNode, LayoutEntry};
 use cmx_utils::response::{Action, Response};
 use std::sync::Mutex;
 use tauri::Manager;
@@ -29,6 +33,7 @@ use tauri::Manager;
 /// Exposed as constants so they can be tested and referenced consistently.
 pub mod tray_menu_ids {
     pub const SHOW: &str = "show";
+    pub const TERMINAL: &str = "terminal";
     pub const CONFIG: &str = "config";
     pub const HELP: &str = "help";
     pub const QUIT: &str = "quit";
@@ -220,6 +225,33 @@ impl AppState {
         sys.execute(cmd)
     }
 
+    /// Drain pending actions from the last execute() call, convert them to
+    /// tmux commands via TmuxBackend, and run each via ShellRunner.
+    ///
+    /// Call this after any execute() that may emit Actions (layout ops).
+    pub fn run_pending_actions(&self) {
+        let actions = self.drain_actions();
+        if actions.is_empty() {
+            return;
+        }
+        let mut backend = TmuxBackend::new();
+        let runner = ShellRunner;
+        for action in &actions {
+            let _ = backend.execute_action(action);
+        }
+        for tmux_cmd in backend.drain_commands() {
+            match runner.run(&tmux_cmd) {
+                Ok(_) => eprintln!("[muxux] ran: {}", tmux_cmd),
+                Err(e) => eprintln!("[muxux] tmux error: {} (cmd: {})", e, tmux_cmd),
+            }
+        }
+    }
+
+    /// Run a raw tmux command string and return the result.
+    pub fn run_tmux(&self, cmd: &str) -> Result<String, String> {
+        ShellRunner.run(cmd)
+    }
+
     /// Return the pending actions from the last execute() call.
     pub fn pending_actions(&self) -> Vec<Action> {
         let sys = self.sys.lock().unwrap();
@@ -239,6 +271,10 @@ impl AppState {
         serde_json::json!({
             "zone_max_width": s.zone_max_width,
             "search_max_rows": s.search_max_rows,
+            "terminal": s.terminal,
+            "lr_slide_start": s.lr_slide_start,
+            "lr_slide_full": s.lr_slide_full,
+            "color_scheme": s.color_scheme,
         })
         .to_string()
     }
@@ -292,15 +328,173 @@ impl AppState {
     }
 
     // -------------------------------------------------------------------
-    // Client commands
+    // Direct tmux operations (Phase 1)
+    // -------------------------------------------------------------------
+
+    pub fn layout_resize(&self, pane: &str, direction: &str, amount: u32) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        let cmd = builder.resize_pane_direction(pane, direction, amount);
+        match self.run_tmux(&cmd) {
+            Ok(_) => Response::Ok {
+                output: format!("Resized pane {} {}", pane, direction),
+            },
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    pub fn layout_even_out(&self, pane: &str) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        let cmd = builder.select_layout_tiled(pane);
+        match self.run_tmux(&cmd) {
+            Ok(_) => Response::Ok {
+                output: "Layout evened out".into(),
+            },
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    pub fn layout_kill_pane(&self, pane: &str) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        let cmd = builder.kill_pane(pane);
+        match self.run_tmux(&cmd) {
+            Ok(_) => Response::Ok {
+                output: format!("Pane {} deleted", pane),
+            },
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    pub fn layout_swap_pane(&self, pane: &str, direction: &str) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        let up = direction == "up";
+        let cmd = builder.swap_pane(pane, up);
+        match self.run_tmux(&cmd) {
+            Ok(_) => Response::Ok {
+                output: format!("Swapped pane {} {}", pane, direction),
+            },
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    pub fn layout_break_pane(&self, pane: &str) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        let cmd = builder.break_pane(pane);
+        match self.run_tmux(&cmd) {
+            Ok(_) => Response::Ok {
+                output: format!("Pane {} detached", pane),
+            },
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Client commands (Phase 1 — now actually run tmux)
     // -------------------------------------------------------------------
 
     pub fn client_next(&self) -> Response {
-        self.execute(Command::ClientNext)
+        let builder = TmuxCommandBuilder::new();
+        let cmd = builder.switch_client_next();
+        match self.run_tmux(&cmd) {
+            Ok(_) => Response::Ok {
+                output: "Switched to next client".into(),
+            },
+            Err(e) => Response::Error { message: e },
+        }
     }
 
     pub fn client_prev(&self) -> Response {
-        self.execute(Command::ClientPrev)
+        let builder = TmuxCommandBuilder::new();
+        let cmd = builder.switch_client_prev();
+        match self.run_tmux(&cmd) {
+            Ok(_) => Response::Ok {
+                output: "Switched to previous client".into(),
+            },
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Session switch (Phase 2)
+    // -------------------------------------------------------------------
+
+    pub fn session_switch(&self, name: &str) -> Response {
+        let builder = TmuxCommandBuilder::new();
+        let cmd = builder.switch_client(name);
+        match self.run_tmux(&cmd) {
+            Ok(_) => Response::Ok {
+                output: format!("Switched to session '{}'", name),
+            },
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Templates (Phase 3)
+    // -------------------------------------------------------------------
+
+    pub fn template_apply(&self, pane: &str, template: &str) -> Response {
+        let layout = match template {
+            "2-col" => LayoutNode::Row {
+                children: vec![
+                    LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(50) },
+                    LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(50) },
+                ],
+            },
+            "3-col" => LayoutNode::Row {
+                children: vec![
+                    LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(33) },
+                    LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(34) },
+                    LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(33) },
+                ],
+            },
+            "2-row" => LayoutNode::Col {
+                children: vec![
+                    LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(50) },
+                    LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(50) },
+                ],
+            },
+            "dashboard" => LayoutNode::Row {
+                children: vec![
+                    LayoutEntry {
+                        node: LayoutNode::Col {
+                            children: vec![
+                                LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(50) },
+                                LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(50) },
+                            ],
+                        },
+                        percent: Some(50),
+                    },
+                    LayoutEntry {
+                        node: LayoutNode::Col {
+                            children: vec![
+                                LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(50) },
+                                LayoutEntry { node: LayoutNode::Pane { agent: "".into() }, percent: Some(50) },
+                            ],
+                        },
+                        percent: Some(50),
+                    },
+                ],
+            },
+            _ => return Response::Error {
+                message: format!("Unknown template: {}", template),
+            },
+        };
+
+        let commands = realize_layout(pane, &layout);
+        let runner = ShellRunner;
+        for cmd in &commands {
+            match runner.run(cmd) {
+                Ok(_) => eprintln!("[muxux] template cmd: {}", cmd),
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("Template failed: {}", e),
+                    };
+                }
+            }
+        }
+        Response::Ok {
+            output: format!("Template '{}' applied ({} splits)", template, commands.len()),
+        }
     }
 }
 
@@ -351,6 +545,72 @@ fn hotkey_toggle_overlay(handle: &tauri::AppHandle) {
 }
 
 
+/// Resolve the URL for a page in the frontend.
+///
+/// In dev mode (cfg debug_assertions), dynamically created windows need an
+/// explicit URL pointing at the vite dev server since WebviewUrl::App may not
+/// resolve the devUrl for non-main windows.
+fn terminal_url() -> tauri::WebviewUrl {
+    #[cfg(debug_assertions)]
+    {
+        // In dev mode, use the vite dev server URL directly
+        tauri::WebviewUrl::External(
+            "http://localhost:1420/terminal.html".parse().unwrap(),
+        )
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        tauri::WebviewUrl::App("terminal.html".into())
+    }
+}
+
+
+/// Open a new terminal window via the Tauri app handle.
+pub fn open_terminal_window(handle: &tauri::AppHandle) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static TRAY_TERMINAL_COUNTER: AtomicU32 = AtomicU32::new(100);
+
+    let n = TRAY_TERMINAL_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let label = format!("terminal-{}", n);
+    let url = terminal_url();
+    eprintln!("[muxux] opening terminal '{}' with url: {:?}", label, url);
+
+    match tauri::WebviewWindowBuilder::new(handle, &label, url)
+        .title("MuxUX Terminal")
+        .inner_size(900.0, 600.0)
+        .resizable(true)
+        .decorations(true)
+        .always_on_top(false)
+        .build()
+    {
+        Ok(_) => eprintln!("[muxux] terminal window '{}' opened", label),
+        Err(e) => eprintln!("[muxux] failed to open terminal: {}", e),
+    }
+}
+
+
+/// Focus the most recent terminal window, or open a new one if none exist.
+///
+/// Scans all webview windows for labels starting with "terminal-" and focuses
+/// the last one found.  If no terminal windows exist, opens a new one.
+fn focus_or_open_terminal(handle: &tauri::AppHandle) {
+    let terminals: Vec<tauri::WebviewWindow> = handle
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label.starts_with("terminal-"))
+        .map(|(_, w)| w)
+        .collect();
+
+    if let Some(window) = terminals.last() {
+        let _ = window.show();
+        let _ = window.set_focus();
+        eprintln!("[muxux] focused terminal '{}'", window.label());
+    } else {
+        open_terminal_window(handle);
+    }
+}
+
+
 /// Assemble and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -372,6 +632,7 @@ pub fn run() {
     let overlay_args = OverlayArgs::from_env();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_pty::init())
         .manage(state)
         .manage(overlay_state)
         .invoke_handler(tauri::generate_handler![
@@ -382,21 +643,34 @@ pub fn run() {
             ipc::mux_help,
             // Settings
             ipc::mux_get_settings,
-            // Layout
+            // Layout (Action-based)
             ipc::mux_layout_row,
             ipc::mux_layout_column,
             ipc::mux_layout_merge,
             ipc::mux_layout_place,
             ipc::mux_layout_capture,
             ipc::mux_layout_session,
+            // Layout (direct tmux — Phase 1)
+            ipc::mux_layout_resize,
+            ipc::mux_layout_even_out,
+            ipc::mux_layout_kill_pane,
+            ipc::mux_layout_swap_pane,
+            ipc::mux_layout_break_pane,
             // Client
             ipc::mux_client_next,
             ipc::mux_client_prev,
+            // Session switch (Phase 2)
+            ipc::mux_session_switch,
+            // Templates (Phase 3)
+            ipc::mux_template_apply,
             // Overlay
             ipc::mux_show_overlay,
             ipc::mux_hide_overlay,
             ipc::mux_get_target_pane,
             ipc::mux_toggle_overlay,
+            ipc::mux_summon_overlay,
+            // Terminal
+            ipc::mux_open_terminal,
         ])
         .setup(move |app| {
             // Handle CLI overlay args (existing right-click trigger path)
@@ -425,6 +699,9 @@ pub fn run() {
                 let show_item = MenuItemBuilder::with_id(
                     tray_menu_ids::SHOW, "Show MuxUX",
                 ).build(app)?;
+                let terminal_item = MenuItemBuilder::with_id(
+                    tray_menu_ids::TERMINAL, "New Terminal",
+                ).build(app)?;
                 let config_item = MenuItemBuilder::with_id(
                     tray_menu_ids::CONFIG, "Config",
                 ).build(app)?;
@@ -437,6 +714,7 @@ pub fn run() {
 
                 let menu = MenuBuilder::new(app)
                     .item(&show_item)
+                    .item(&terminal_item)
                     .separator()
                     .item(&config_item)
                     .item(&help_item)
@@ -445,6 +723,7 @@ pub fn run() {
                     .build()?;
 
                 let handle_for_tray = app.handle().clone();
+                let handle_for_click = app.handle().clone();
                 let has_icon = app.default_window_icon().is_some();
                 eprintln!("[muxux] default_window_icon present: {}", has_icon);
 
@@ -462,10 +741,18 @@ pub fn run() {
                             tray_menu_ids::SHOW => {
                                 hotkey_toggle_overlay(&handle_for_tray);
                             }
+                            tray_menu_ids::TERMINAL => {
+                                open_terminal_window(&handle_for_tray);
+                            }
                             tray_menu_ids::QUIT => {
                                 std::process::exit(0);
                             }
                             _ => {} // config, help — placeholder for now
+                        }
+                    })
+                    .on_tray_icon_event(move |_tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                            focus_or_open_terminal(&handle_for_click);
                         }
                     })
                     .build(app)?;
@@ -505,6 +792,9 @@ pub fn run() {
                     Err(e) => eprintln!("[muxux] shortcut registration FAILED: {}", e),
                 }
             }
+
+            // Auto-open a terminal window on launch
+            open_terminal_window(app.handle());
 
             eprintln!("[muxux] setup complete");
             Ok(())
@@ -765,6 +1055,7 @@ mod tests {
     fn tray_menu_ids_are_distinct() {
         let ids = [
             tray_menu_ids::SHOW,
+            tray_menu_ids::TERMINAL,
             tray_menu_ids::CONFIG,
             tray_menu_ids::HELP,
             tray_menu_ids::QUIT,
@@ -782,6 +1073,7 @@ mod tests {
     #[test]
     fn tray_menu_ids_match_expected_strings() {
         assert_eq!(tray_menu_ids::SHOW, "show");
+        assert_eq!(tray_menu_ids::TERMINAL, "terminal");
         assert_eq!(tray_menu_ids::CONFIG, "config");
         assert_eq!(tray_menu_ids::HELP, "help");
         assert_eq!(tray_menu_ids::QUIT, "quit");
@@ -790,6 +1082,7 @@ mod tests {
     #[test]
     fn tray_menu_ids_not_empty() {
         assert!(!tray_menu_ids::SHOW.is_empty());
+        assert!(!tray_menu_ids::TERMINAL.is_empty());
         assert!(!tray_menu_ids::CONFIG.is_empty());
         assert!(!tray_menu_ids::HELP.is_empty());
         assert!(!tray_menu_ids::QUIT.is_empty());
@@ -814,6 +1107,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["zone_max_width"], 160);
         assert_eq!(parsed["search_max_rows"], 10);
+        assert_eq!(parsed["terminal"], "muxux");
+        assert_eq!(parsed["lr_slide_start"], 5);
+        assert_eq!(parsed["lr_slide_full"], 40);
+        assert_eq!(parsed["color_scheme"], "system");
     }
 
     #[test]
@@ -822,9 +1119,12 @@ mod tests {
         let json_str = state.get_settings();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let obj = parsed.as_object().unwrap();
-        // Should contain exactly the two frontend-relevant fields
-        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.len(), 6);
         assert!(obj.contains_key("zone_max_width"));
         assert!(obj.contains_key("search_max_rows"));
+        assert!(obj.contains_key("terminal"));
+        assert!(obj.contains_key("lr_slide_start"));
+        assert!(obj.contains_key("lr_slide_full"));
+        assert!(obj.contains_key("color_scheme"));
     }
 }

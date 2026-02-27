@@ -141,6 +141,59 @@ impl TmuxCommandBuilder {
     pub fn unbind_mouse_hook(&self) -> String {
         "tmux unbind -n MouseDown3Pane".to_string()
     }
+
+    /// `tmux kill-pane -t <target>`
+    pub fn kill_pane(&self, target: &str) -> String {
+        format!("tmux kill-pane -t {}", shell_escape(target))
+    }
+
+    /// `tmux swap-pane -t <target> -U|-D`
+    pub fn swap_pane(&self, target: &str, up: bool) -> String {
+        let flag = if up { "-U" } else { "-D" };
+        format!("tmux swap-pane -t {} {}", shell_escape(target), flag)
+    }
+
+    /// `tmux break-pane -t <target> -d`
+    pub fn break_pane(&self, target: &str) -> String {
+        format!("tmux break-pane -t {} -d", shell_escape(target))
+    }
+
+    /// `tmux select-layout -t <target> tiled`
+    pub fn select_layout_tiled(&self, target: &str) -> String {
+        format!("tmux select-layout -t {} tiled", shell_escape(target))
+    }
+
+    /// `tmux switch-client -n`
+    pub fn switch_client_next(&self) -> String {
+        "tmux switch-client -n".to_string()
+    }
+
+    /// `tmux switch-client -p`
+    pub fn switch_client_prev(&self) -> String {
+        "tmux switch-client -p".to_string()
+    }
+
+    /// `tmux switch-client -t <target>`
+    pub fn switch_client(&self, target: &str) -> String {
+        format!("tmux switch-client -t {}", shell_escape(target))
+    }
+
+    /// `tmux resize-pane -t <target> -L|-R|-U|-D <amount>`
+    pub fn resize_pane_direction(&self, target: &str, dir: &str, amount: u32) -> String {
+        let flag = match dir {
+            "left" => "-L",
+            "right" => "-R",
+            "up" => "-U",
+            "down" => "-D",
+            _ => "-R",
+        };
+        format!(
+            "tmux resize-pane -t {} {} {}",
+            shell_escape(target),
+            flag,
+            amount
+        )
+    }
 }
 
 impl Default for TmuxCommandBuilder {
@@ -814,6 +867,63 @@ mod tests {
         let b = TmuxCommandBuilder::new();
         let cmd = b.unbind_mouse_hook();
         assert_eq!(cmd, "tmux unbind -n MouseDown3Pane");
+    }
+
+    #[test]
+    fn cmd_kill_pane() {
+        let b = TmuxCommandBuilder::new();
+        assert_eq!(b.kill_pane("%5"), "tmux kill-pane -t %5");
+    }
+
+    #[test]
+    fn cmd_swap_pane_up() {
+        let b = TmuxCommandBuilder::new();
+        assert_eq!(b.swap_pane("%5", true), "tmux swap-pane -t %5 -U");
+    }
+
+    #[test]
+    fn cmd_swap_pane_down() {
+        let b = TmuxCommandBuilder::new();
+        assert_eq!(b.swap_pane("%5", false), "tmux swap-pane -t %5 -D");
+    }
+
+    #[test]
+    fn cmd_break_pane() {
+        let b = TmuxCommandBuilder::new();
+        assert_eq!(b.break_pane("%5"), "tmux break-pane -t %5 -d");
+    }
+
+    #[test]
+    fn cmd_select_layout_tiled() {
+        let b = TmuxCommandBuilder::new();
+        assert_eq!(b.select_layout_tiled("work"), "tmux select-layout -t work tiled");
+    }
+
+    #[test]
+    fn cmd_switch_client_next() {
+        let b = TmuxCommandBuilder::new();
+        assert_eq!(b.switch_client_next(), "tmux switch-client -n");
+    }
+
+    #[test]
+    fn cmd_switch_client_prev() {
+        let b = TmuxCommandBuilder::new();
+        assert_eq!(b.switch_client_prev(), "tmux switch-client -p");
+    }
+
+    #[test]
+    fn cmd_switch_client() {
+        let b = TmuxCommandBuilder::new();
+        assert_eq!(b.switch_client("work"), "tmux switch-client -t work");
+    }
+
+    #[test]
+    fn cmd_resize_pane_all_directions() {
+        let b = TmuxCommandBuilder::new();
+        assert_eq!(b.resize_pane_direction("%5", "left", 10), "tmux resize-pane -t %5 -L 10");
+        assert_eq!(b.resize_pane_direction("%5", "right", 10), "tmux resize-pane -t %5 -R 10");
+        assert_eq!(b.resize_pane_direction("%5", "up", 10), "tmux resize-pane -t %5 -U 10");
+        assert_eq!(b.resize_pane_direction("%5", "down", 10), "tmux resize-pane -t %5 -D 10");
     }
 
     #[test]

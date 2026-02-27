@@ -6,6 +6,7 @@
 use crate::AppState;
 use cmx_utils::response::Response;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU32, Ordering};
 use tauri::State;
 
 
@@ -75,27 +76,52 @@ pub fn mux_get_settings(state: State<'_, AppState>) -> IpcResponse {
 // Layout commands
 // ---------------------------------------------------------------------------
 
+/// Resolve the target for a layout operation: if "current", use the overlay's
+/// target pane; otherwise use the given value directly.
+fn resolve_target(session: &str, overlay: &crate::OverlayState) -> String {
+    if session == "current" {
+        overlay.get_target_pane().unwrap_or_else(|| session.to_string())
+    } else {
+        session.to_string()
+    }
+}
+
 #[tauri::command]
 pub fn mux_layout_row(
     state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
     session: String,
     percent: Option<String>,
 ) -> IpcResponse {
-    to_ipc(state.layout_row(session, percent))
+    let target = resolve_target(&session, &overlay);
+    let resp = to_ipc(state.layout_row(target, percent));
+    state.run_pending_actions();
+    resp
 }
 
 #[tauri::command]
 pub fn mux_layout_column(
     state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
     session: String,
     percent: Option<String>,
 ) -> IpcResponse {
-    to_ipc(state.layout_column(session, percent))
+    let target = resolve_target(&session, &overlay);
+    let resp = to_ipc(state.layout_column(target, percent));
+    state.run_pending_actions();
+    resp
 }
 
 #[tauri::command]
-pub fn mux_layout_merge(state: State<'_, AppState>, session: String) -> IpcResponse {
-    to_ipc(state.layout_merge(session))
+pub fn mux_layout_merge(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+    session: String,
+) -> IpcResponse {
+    let target = resolve_target(&session, &overlay);
+    let resp = to_ipc(state.layout_merge(target));
+    state.run_pending_actions();
+    resp
 }
 
 #[tauri::command]
@@ -104,7 +130,9 @@ pub fn mux_layout_place(
     pane: String,
     agent: String,
 ) -> IpcResponse {
-    to_ipc(state.layout_place(pane, agent))
+    let resp = to_ipc(state.layout_place(pane, agent));
+    state.run_pending_actions();
+    resp
 }
 
 #[tauri::command]
@@ -118,9 +146,62 @@ pub fn mux_layout_session(
     name: String,
     cwd: Option<String>,
 ) -> IpcResponse {
-    to_ipc(state.layout_session(name, cwd))
+    let resp = to_ipc(state.layout_session(name, cwd));
+    state.run_pending_actions();
+    resp
 }
 
+// ---------------------------------------------------------------------------
+// Direct tmux operations (Phase 1)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn mux_layout_resize(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+    direction: String,
+    amount: Option<u32>,
+) -> IpcResponse {
+    let pane = overlay.get_target_pane().unwrap_or_default();
+    to_ipc(state.layout_resize(&pane, &direction, amount.unwrap_or(5)))
+}
+
+#[tauri::command]
+pub fn mux_layout_even_out(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+) -> IpcResponse {
+    let pane = overlay.get_target_pane().unwrap_or_default();
+    to_ipc(state.layout_even_out(&pane))
+}
+
+#[tauri::command]
+pub fn mux_layout_kill_pane(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+) -> IpcResponse {
+    let pane = overlay.get_target_pane().unwrap_or_default();
+    to_ipc(state.layout_kill_pane(&pane))
+}
+
+#[tauri::command]
+pub fn mux_layout_swap_pane(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+    direction: String,
+) -> IpcResponse {
+    let pane = overlay.get_target_pane().unwrap_or_default();
+    to_ipc(state.layout_swap_pane(&pane, &direction))
+}
+
+#[tauri::command]
+pub fn mux_layout_break_pane(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+) -> IpcResponse {
+    let pane = overlay.get_target_pane().unwrap_or_default();
+    to_ipc(state.layout_break_pane(&pane))
+}
 
 // ---------------------------------------------------------------------------
 // Client commands
@@ -134,6 +215,32 @@ pub fn mux_client_next(state: State<'_, AppState>) -> IpcResponse {
 #[tauri::command]
 pub fn mux_client_prev(state: State<'_, AppState>) -> IpcResponse {
     to_ipc(state.client_prev())
+}
+
+// ---------------------------------------------------------------------------
+// Session switch (Phase 2)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn mux_session_switch(
+    state: State<'_, AppState>,
+    name: String,
+) -> IpcResponse {
+    to_ipc(state.session_switch(&name))
+}
+
+// ---------------------------------------------------------------------------
+// Template application (Phase 3)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn mux_template_apply(
+    state: State<'_, AppState>,
+    overlay: State<'_, crate::OverlayState>,
+    template: String,
+) -> IpcResponse {
+    let pane = overlay.get_target_pane().unwrap_or_default();
+    to_ipc(state.template_apply(&pane, &template))
 }
 
 
@@ -206,6 +313,59 @@ pub fn mux_toggle_overlay(
         let _ = window.show();
         let _ = window.set_focus();
         IpcResponse::success(format!("overlay shown for pane {}", pane_id))
+    }
+}
+
+
+/// Summon the overlay from any window (e.g. a terminal window) at given screen coords.
+///
+/// Unlike `mux_show_overlay` which operates on the calling window, this finds
+/// the "main" overlay window by label and shows it at (x, y).
+#[tauri::command]
+pub fn mux_summon_overlay(
+    app: tauri::AppHandle,
+    overlay: State<'_, crate::OverlayState>,
+    x: i32,
+    y: i32,
+) -> IpcResponse {
+    use tauri::Manager;
+    let pane_id = crate::query_tmux_pane_id().unwrap_or_default();
+    overlay.show(pane_id.clone());
+
+    match app.get_webview_window("main") {
+        Some(window) => {
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+            let _ = window.show();
+            let _ = window.set_focus();
+            IpcResponse::success(format!("overlay summoned at ({}, {}) for pane {}", x, y, pane_id))
+        }
+        None => IpcResponse::error("overlay window 'main' not found".into()),
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Terminal commands
+// ---------------------------------------------------------------------------
+
+static TERMINAL_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+#[tauri::command]
+pub fn mux_open_terminal(app: tauri::AppHandle) -> IpcResponse {
+    let n = TERMINAL_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let label = format!("terminal-{}", n);
+
+    let url = crate::terminal_url();
+    match tauri::WebviewWindowBuilder::new(&app, &label, url)
+        .title("MuxUX Terminal")
+        .inner_size(900.0, 600.0)
+        .resizable(true)
+        .decorations(true)
+        .always_on_top(false)
+        .build()
+    {
+        Ok(_) => IpcResponse::success(format!("terminal window '{}' opened", label)),
+        Err(e) => IpcResponse::error(format!("failed to open terminal: {}", e)),
     }
 }
 
@@ -295,7 +455,7 @@ mod tests {
     #[test]
     fn ipc_response_settings_json_round_trip() {
         // Verify that a settings JSON payload survives IpcResponse serialization
-        let settings_json = r#"{"zone_max_width":160,"search_max_rows":10}"#;
+        let settings_json = r#"{"zone_max_width":160,"search_max_rows":10,"terminal":"muxux","lr_slide_start":5,"lr_slide_full":40,"color_scheme":"system"}"#;
         let r = IpcResponse::success(settings_json.into());
         let serialized = serde_json::to_string(&r).unwrap();
         let back: IpcResponse = serde_json::from_str(&serialized).unwrap();
@@ -304,5 +464,9 @@ mod tests {
         let inner: serde_json::Value = serde_json::from_str(&back.data).unwrap();
         assert_eq!(inner["zone_max_width"], 160);
         assert_eq!(inner["search_max_rows"], 10);
+        assert_eq!(inner["terminal"], "muxux");
+        assert_eq!(inner["lr_slide_start"], 5);
+        assert_eq!(inner["lr_slide_full"], 40);
+        assert_eq!(inner["color_scheme"], "system");
     }
 }
