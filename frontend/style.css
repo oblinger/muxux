@@ -104,7 +104,6 @@ html, body {
   left: 50%;
   transform: translateX(-50%);
   margin-bottom: 12px;
-  height: fit-content;
   background: rgb(20, 28, 50);
   border: 1px solid rgba(59, 130, 246, 0.4);
 }
@@ -176,6 +175,7 @@ html, body {
 /* Item pills                                                          */
 /* ------------------------------------------------------------------ */
 .zone-item {
+  flex: 0 0 auto;
   padding: 6px 14px;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.08);
@@ -284,18 +284,19 @@ html, body {
 }
 
 /* Sub-panels from Up/Down/Right zones expand RIGHTWARD.
+   Overlap parent by 8px so the hover bridge is short.
    Use padding (not margin) so hovering the gap keeps .has-submenu:hover alive. */
 .sub-panel-up,
 .sub-panel-down,
 .sub-panel-right {
-  left: 100%;
+  left: calc(100% - 8px);
   top: 0;
   padding-left: 4px;
 }
 
 /* Sub-panels from Left zone expand LEFTWARD */
 .sub-panel-left {
-  right: 100%;
+  right: calc(100% - 8px);
   top: 0;
   padding-right: 4px;
 }

@@ -1014,8 +1014,8 @@ async function buildOverlay(): Promise<void> {
 // ---------------------------------------------------------------------------
 const APP_SIZE = 700;
 const CENTER = APP_SIZE / 2;
-const DEADZONE = 30;        // px from center — show all zones
-const DISMISS_RADIUS = 280; // px from center — dismiss when not over content
+const DEADZONE = 30;            // px from center — show all zones
+const DISMISS_MARGIN = 50;      // px from nearest content rect → dismiss
 
 type Direction = "up" | "down" | "left" | "right";
 type ZoneVisibility = Direction | "all" | "none";
@@ -1031,6 +1031,32 @@ function resetMousePhase(): void {
   mousePhase = "pristine";
   visibleZone = "all";
   resetLRSlide();
+}
+
+/** Minimum pixel distance from (cx, cy) to the nearest visible content rect. */
+function distToNearestContent(cx: number, cy: number): number {
+  const selectors = ".zone, .sub-panel, .center-input, .spotlight-dropdown, .center-star";
+  const els = document.querySelectorAll<HTMLElement>(selectors);
+  let minDist = Infinity;
+
+  els.forEach((el) => {
+    // Skip hidden elements
+    const style = getComputedStyle(el);
+    if (style.display === "none" || style.opacity === "0") return;
+    // sub-panels are display:none until hovered — skip those too
+    if (el.classList.contains("sub-panel") && style.display === "none") return;
+
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return;
+
+    // Distance from point to axis-aligned rect
+    const dx = Math.max(r.left - cx, 0, cx - r.right);
+    const dy = Math.max(r.top - cy, 0, cy - r.bottom);
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d < minDist) minDist = d;
+  });
+
+  return minDist;
 }
 
 function directionalZone(mx: number, my: number): ZoneVisibility {
@@ -1097,30 +1123,26 @@ document.addEventListener("mousemove", (e: MouseEvent) => {
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
 
-  const dx = mx - CENTER;
-  const dy = my - CENTER;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-
-  // Content-aware: check if cursor is over an interactive element
-  const target = e.target as HTMLElement;
-  const overContent = !!target.closest(".zone, .sub-panel, .center-input, .spotlight-dropdown");
+  // Distance from cursor to nearest visible content element (in screen coords)
+  const contentDist = distToNearestContent(e.clientX, e.clientY);
+  const overContent = contentDist === 0;
 
   if (mousePhase === "pristine") {
-    if (overContent || dist < DISMISS_RADIUS) {
+    if (overContent || contentDist < DISMISS_MARGIN) {
       const prev = mousePhase;
       mousePhase = "tracking";
-      console.log(`[mux-mouse] phase=${prev}→tracking dist=${Math.round(dist)} overContent=${overContent}`);
+      console.log(`[mux-mouse] phase=${prev}→tracking contentDist=${Math.round(contentDist)} overContent=${overContent}`);
       setVisibleZone(directionalZone(mx, my));
     }
-    // Still far out and not over content — stay pristine, show all
+    // Still far from content — stay pristine, show all
     return;
   }
 
   // mousePhase === "tracking"
-  if (!overContent && dist > DISMISS_RADIUS) {
+  if (!overContent && contentDist > DISMISS_MARGIN) {
     const prev = mousePhase;
     mousePhase = "dismissed";
-    console.log(`[mux-mouse] phase=${prev}→dismissed dist=${Math.round(dist)} overContent=${overContent}`);
+    console.log(`[mux-mouse] phase=${prev}→dismissed contentDist=${Math.round(contentDist)}`);
     setVisibleZone("none");
     invoke("mux_hide_overlay");
     return;
