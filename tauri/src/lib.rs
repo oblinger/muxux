@@ -17,6 +17,11 @@
 
 pub mod ipc;
 
+/// Overlay window size in pixels. The window is transparent, so making it
+/// larger than the visible content has no visual impact but prevents
+/// sub-menus from being clipped at the boundary.
+pub const OVERLAY_SIZE: i32 = 700;
+
 use muxux_core::command::Command;
 use muxux_core::sys::Sys;
 use muxux_core::infrastructure::tmux::{TmuxBackend, TmuxCommandBuilder, realize_layout};
@@ -644,7 +649,7 @@ fn hotkey_toggle_overlay(handle: &tauri::AppHandle) {
             let _ = window.hide();
         }
     } else {
-        let pane_id = query_tmux_pane_id().unwrap_or_default();
+        let pane_id = query_tmux_pane_id().unwrap_or_else(|| ".".to_string());
         eprintln!("[muxux] toggle: showing overlay for pane '{}'", pane_id);
         overlay.show(pane_id);
 
@@ -653,8 +658,8 @@ fn hotkey_toggle_overlay(handle: &tauri::AppHandle) {
                 if let Some(monitor) = window.current_monitor().ok().flatten() {
                     let size = monitor.size();
                     let pos = monitor.position();
-                    let win_w = 400_i32;
-                    let win_h = 400_i32;
+                    let win_w = OVERLAY_SIZE;
+                    let win_h = OVERLAY_SIZE;
                     let cx = pos.x + (size.width as i32 - win_w) / 2;
                     let cy = pos.y + (size.height as i32 - win_h) / 2;
                     eprintln!("[muxux] positioning at ({}, {}), monitor {}x{}", cx, cy, size.width, size.height);

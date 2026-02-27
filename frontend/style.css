@@ -8,6 +8,7 @@
   --yellow: #eab308;
   --pink: #ec4899;
   --zone-max-width: 160px;
+  --lr-push: 80px;
   --brick-columns: 3;
 }
 
@@ -20,9 +21,11 @@ html, body {
 
 #app {
   position: relative;
-  width: 400px;
-  height: 400px;
-  background: transparent;
+  width: 700px;
+  height: 700px;
+  /* Nearly invisible but non-transparent so macOS delivers mouse events
+     across the entire window, not just over opaque elements. */
+  background: rgba(0, 0, 0, 0.01);
 }
 
 /* ------------------------------------------------------------------ */
@@ -46,10 +49,25 @@ html, body {
   caret-color: rgba(255, 255, 255, 0.7);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
   z-index: 10;
+  transition: opacity 150ms ease;
 }
 
 .center-input::placeholder {
   color: rgba(255, 255, 255, 0.25);
+}
+
+/* ------------------------------------------------------------------ */
+/* Center star indicator                                               */
+/* ------------------------------------------------------------------ */
+.center-star {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 150ms ease;
 }
 
 /* ------------------------------------------------------------------ */
@@ -64,7 +82,7 @@ html, body {
   padding: 8px 6px;
   border-radius: 10px;
   max-width: var(--zone-max-width);
-  transition: opacity 100ms ease;
+  transition: opacity 150ms ease;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
 }
 
@@ -86,6 +104,7 @@ html, body {
   left: 50%;
   transform: translateX(-50%);
   margin-bottom: 12px;
+  height: fit-content;
   background: rgb(20, 28, 50);
   border: 1px solid rgba(59, 130, 246, 0.4);
 }
@@ -104,20 +123,24 @@ html, body {
 .zone-left {
   right: 50%;
   top: 50%;
-  transform: translateY(-50%);
+  transform: translateY(-50%) translateX(calc(-1 * var(--lr-push)));
   margin-right: 12px;
   background: rgb(35, 18, 30);
   border: 1px solid rgba(236, 72, 153, 0.4);
+  box-sizing: border-box;
+  transition: opacity 150ms ease, transform 80ms ease-out, min-width 80ms ease-out;
 }
 
 /* Right zone — centered vertically, extends rightward from center */
 .zone-right {
   left: 50%;
   top: 50%;
-  transform: translateY(-50%);
+  transform: translateY(-50%) translateX(var(--lr-push));
   margin-left: 12px;
   background: rgb(18, 32, 22);
   border: 1px solid rgba(34, 197, 94, 0.4);
+  box-sizing: border-box;
+  transition: opacity 150ms ease, transform 80ms ease-out, min-width 80ms ease-out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -163,28 +186,29 @@ html, body {
   text-overflow: ellipsis;
   cursor: pointer;
   user-select: none;
+  text-align: center;
   transition: background 150ms ease, box-shadow 150ms ease;
 }
 
 /* Hover effects per zone color */
 .zone-up .zone-item:hover {
-  background: rgba(59, 130, 246, 0.25);
-  box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
 }
 
 .zone-down .zone-item:hover {
-  background: rgba(234, 179, 8, 0.25);
-  box-shadow: 0 0 8px rgba(234, 179, 8, 0.3);
+  background: rgba(234, 179, 8, 0.5);
+  box-shadow: 0 0 12px rgba(234, 179, 8, 0.5);
 }
 
 .zone-left .zone-item:hover {
-  background: rgba(236, 72, 153, 0.25);
-  box-shadow: 0 0 8px rgba(236, 72, 153, 0.3);
+  background: rgba(236, 72, 153, 0.5);
+  box-shadow: 0 0 12px rgba(236, 72, 153, 0.5);
 }
 
 .zone-right .zone-item:hover {
-  background: rgba(34, 197, 94, 0.25);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.5);
 }
 
 /* Click confirmation pulse */
@@ -253,46 +277,48 @@ html, body {
   display: flex;
 }
 
-/* Submenu items need position: relative for the sub-panel to anchor to */
+/* Submenu items need position: relative and visible overflow for the sub-panel */
 .has-submenu {
   position: relative;
+  overflow: visible;
 }
 
-/* Sub-panels from Up/Down/Right zones expand RIGHTWARD */
+/* Sub-panels from Up/Down/Right zones expand RIGHTWARD.
+   Use padding (not margin) so hovering the gap keeps .has-submenu:hover alive. */
 .sub-panel-up,
 .sub-panel-down,
 .sub-panel-right {
   left: 100%;
   top: 0;
-  margin-left: 4px;
+  padding-left: 4px;
 }
 
 /* Sub-panels from Left zone expand LEFTWARD */
 .sub-panel-left {
   right: 100%;
   top: 0;
-  margin-right: 4px;
+  padding-right: 4px;
 }
 
 /* Sub-items inherit the parent zone's hover color */
 .zone-up .sub-item:hover {
-  background: rgba(59, 130, 246, 0.25);
-  box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
 }
 
 .zone-down .sub-item:hover {
-  background: rgba(234, 179, 8, 0.25);
-  box-shadow: 0 0 8px rgba(234, 179, 8, 0.3);
+  background: rgba(234, 179, 8, 0.5);
+  box-shadow: 0 0 12px rgba(234, 179, 8, 0.5);
 }
 
 .zone-left .sub-item:hover {
-  background: rgba(236, 72, 153, 0.25);
-  box-shadow: 0 0 8px rgba(236, 72, 153, 0.3);
+  background: rgba(236, 72, 153, 0.5);
+  box-shadow: 0 0 12px rgba(236, 72, 153, 0.5);
 }
 
 .zone-right .sub-item:hover {
-  background: rgba(34, 197, 94, 0.25);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.5);
 }
 
 /* ------------------------------------------------------------------ */

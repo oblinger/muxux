@@ -284,69 +284,93 @@ function showFlashToast(message: string): void {
 // ---------------------------------------------------------------------------
 // Execute zone item action
 // ---------------------------------------------------------------------------
+
+/** Invoke an IPC command, log the result, show errors as a toast, then dismiss. */
+async function execAndDismiss(
+  ipcName: string,
+  args: Record<string, unknown>,
+  label: string,
+): Promise<void> {
+  try {
+    const resp: IpcResponse = await invoke(ipcName, args);
+    console.log(`[mux-ipc] ${label}: ok=${resp.ok} data=${resp.data}`);
+    if (!resp.ok) {
+      showFlashToast(resp.data || `${label} failed`);
+      // Delay dismiss so user can read the error
+      setTimeout(() => invoke("mux_hide_overlay"), 2000);
+      return;
+    }
+  } catch (err) {
+    console.error(`[mux-ipc] ${label} exception:`, err);
+    showFlashToast(`${label}: ${err}`);
+    setTimeout(() => invoke("mux_hide_overlay"), 2000);
+    return;
+  }
+  await invoke("mux_hide_overlay");
+}
+
 async function executeAction(action: string, param?: string): Promise<void> {
   switch (action) {
     case "session":
-      await invoke("mux_session_switch", { name: param ?? "main" });
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_session_switch", { name: param ?? "main" }, "session_switch");
       break;
 
     case "layout.row":
-      await invoke("mux_layout_row", { session: "current" });
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_layout_row", { session: "current" }, "layout_row");
       break;
 
     case "layout.column":
-      await invoke("mux_layout_column", { session: "current" });
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_layout_column", { session: "current" }, "layout_column");
       break;
 
     case "layout.merge":
-      await invoke("mux_layout_merge", { session: "current" });
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_layout_merge", { session: "current" }, "layout_merge");
       break;
 
     case "layout.resize":
-      await invoke("mux_layout_resize", { direction: param ?? "right" });
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_layout_resize", { direction: param ?? "right" }, "layout_resize");
       break;
 
     case "layout.even_out":
-      await invoke("mux_layout_even_out");
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_layout_even_out", {}, "layout_even_out");
       break;
 
     case "layout.kill_pane":
-      await invoke("mux_layout_kill_pane");
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_layout_kill_pane", {}, "layout_kill_pane");
       break;
 
     case "layout.swap_pane":
-      await invoke("mux_layout_swap_pane", { direction: param ?? "down" });
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_layout_swap_pane", { direction: param ?? "down" }, "layout_swap_pane");
       break;
 
     case "layout.break_pane":
-      await invoke("mux_layout_break_pane");
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_layout_break_pane", {}, "layout_break_pane");
       break;
 
     case "template.apply":
-      await invoke("mux_template_apply", { template: param ?? "2-col" });
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_template_apply", { template: param ?? "2-col" }, "template_apply");
       break;
 
     case "parts.place":
-      await invoke("mux_parts_place", { part: param ?? "" });
-      await invoke("mux_hide_overlay");
+      await execAndDismiss("mux_parts_place", { part: param ?? "" }, "parts_place");
       break;
 
     case "layout.capture_save": {
       // Prompt for a name, then capture and save
       const name = prompt("Save layout as:");
       if (name) {
-        await invoke("mux_layout_capture_save", { name });
-        showFlashToast(`Layout '${name}' saved`);
+        try {
+          const resp: IpcResponse = await invoke("mux_layout_capture_save", { name });
+          console.log(`[mux-ipc] capture_save: ok=${resp.ok} data=${resp.data}`);
+          if (resp.ok) {
+            showFlashToast(`Layout '${name}' saved`);
+          } else {
+            showFlashToast(resp.data || "Capture failed");
+          }
+        } catch (err) {
+          console.error("[mux-ipc] capture_save exception:", err);
+          showFlashToast(`Capture error: ${err}`);
+        }
       }
       await invoke("mux_hide_overlay");
       break;
@@ -988,10 +1012,10 @@ async function buildOverlay(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Mouse-driven zone visibility
 // ---------------------------------------------------------------------------
-const APP_SIZE = 400;
+const APP_SIZE = 700;
 const CENTER = APP_SIZE / 2;
-const DEADZONE = 30;      // px from center — show all zones
-const EDGE_DISMISS = 3;   // px from window edge — counts as "out of bounds"
+const DEADZONE = 30;        // px from center — show all zones
+const DISMISS_RADIUS = 280; // px from center — dismiss when not over content
 
 type Direction = "up" | "down" | "left" | "right";
 type ZoneVisibility = Direction | "all" | "none";
@@ -1007,11 +1031,6 @@ function resetMousePhase(): void {
   mousePhase = "pristine";
   visibleZone = "all";
   resetLRSlide();
-}
-
-function isInBounds(mx: number, my: number): boolean {
-  return mx >= EDGE_DISMISS && mx <= APP_SIZE - EDGE_DISMISS &&
-         my >= EDGE_DISMISS && my <= APP_SIZE - EDGE_DISMISS;
 }
 
 function directionalZone(mx: number, my: number): ZoneVisibility {
@@ -1077,22 +1096,31 @@ document.addEventListener("mousemove", (e: MouseEvent) => {
   const rect = app.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
-  const inBounds = isInBounds(mx, my);
+
+  const dx = mx - CENTER;
+  const dy = my - CENTER;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  // Content-aware: check if cursor is over an interactive element
+  const target = e.target as HTMLElement;
+  const overContent = !!target.closest(".zone, .sub-panel, .center-input, .spotlight-dropdown");
 
   if (mousePhase === "pristine") {
-    if (inBounds) {
-      // Mouse entered — start tracking
+    if (overContent || dist < DISMISS_RADIUS) {
+      const prev = mousePhase;
       mousePhase = "tracking";
+      console.log(`[mux-mouse] phase=${prev}→tracking dist=${Math.round(dist)} overContent=${overContent}`);
       setVisibleZone(directionalZone(mx, my));
     }
-    // Still outside — stay pristine, show all
+    // Still far out and not over content — stay pristine, show all
     return;
   }
 
   // mousePhase === "tracking"
-  if (!inBounds) {
-    // Mouse left after entering — dismiss permanently
+  if (!overContent && dist > DISMISS_RADIUS) {
+    const prev = mousePhase;
     mousePhase = "dismissed";
+    console.log(`[mux-mouse] phase=${prev}→dismissed dist=${Math.round(dist)} overContent=${overContent}`);
     setVisibleZone("none");
     invoke("mux_hide_overlay");
     return;
@@ -1148,6 +1176,7 @@ let focusLossTimer: ReturnType<typeof setTimeout> | null = null;
 let lastFocusGained = 0;
 const currentWindow = getCurrentWindow();
 currentWindow.onFocusChanged(async ({ payload: focused }) => {
+  console.log(`[mux-mouse] focus-change: focused=${focused} phase=${mousePhase}`);
   if (focused) {
     lastFocusGained = Date.now();
     if (focusLossTimer !== null) {

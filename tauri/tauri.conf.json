@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "MuxUX",
-        "width": 400,
-        "height": 400,
+        "width": 700,
+        "height": 700,
         "decorations": false,
         "transparent": true,
         "visible": true,

@@ -76,11 +76,20 @@ pub fn mux_get_settings(state: State<'_, AppState>) -> IpcResponse {
 // Layout commands
 // ---------------------------------------------------------------------------
 
+/// Return the overlay's target pane if non-empty, otherwise `"."` which tells
+/// tmux to use "the current pane".
+fn target_pane_or_current(overlay: &crate::OverlayState) -> String {
+    match overlay.get_target_pane() {
+        Some(ref p) if !p.is_empty() => p.clone(),
+        _ => ".".to_string(),
+    }
+}
+
 /// Resolve the target for a layout operation: if "current", use the overlay's
 /// target pane; otherwise use the given value directly.
 fn resolve_target(session: &str, overlay: &crate::OverlayState) -> String {
     if session == "current" {
-        overlay.get_target_pane().unwrap_or_else(|| session.to_string())
+        target_pane_or_current(overlay)
     } else {
         session.to_string()
     }
@@ -94,6 +103,7 @@ pub fn mux_layout_row(
     percent: Option<String>,
 ) -> IpcResponse {
     let target = resolve_target(&session, &overlay);
+    eprintln!("[muxux-ipc] mux_layout_row: target={}", target);
     let resp = to_ipc(state.layout_row(target, percent));
     state.run_pending_actions();
     resp
@@ -107,6 +117,7 @@ pub fn mux_layout_column(
     percent: Option<String>,
 ) -> IpcResponse {
     let target = resolve_target(&session, &overlay);
+    eprintln!("[muxux-ipc] mux_layout_column: target={}", target);
     let resp = to_ipc(state.layout_column(target, percent));
     state.run_pending_actions();
     resp
@@ -119,6 +130,7 @@ pub fn mux_layout_merge(
     session: String,
 ) -> IpcResponse {
     let target = resolve_target(&session, &overlay);
+    eprintln!("[muxux-ipc] mux_layout_merge: target={}", target);
     let resp = to_ipc(state.layout_merge(target));
     state.run_pending_actions();
     resp
@@ -162,7 +174,8 @@ pub fn mux_layout_resize(
     direction: String,
     amount: Option<u32>,
 ) -> IpcResponse {
-    let pane = overlay.get_target_pane().unwrap_or_default();
+    let pane = target_pane_or_current(&overlay);
+    eprintln!("[muxux-ipc] mux_layout_resize: pane={} dir={}", pane, direction);
     to_ipc(state.layout_resize(&pane, &direction, amount.unwrap_or(5)))
 }
 
@@ -171,7 +184,8 @@ pub fn mux_layout_even_out(
     state: State<'_, AppState>,
     overlay: State<'_, crate::OverlayState>,
 ) -> IpcResponse {
-    let pane = overlay.get_target_pane().unwrap_or_default();
+    let pane = target_pane_or_current(&overlay);
+    eprintln!("[muxux-ipc] mux_layout_even_out: pane={}", pane);
     to_ipc(state.layout_even_out(&pane))
 }
 
@@ -180,7 +194,8 @@ pub fn mux_layout_kill_pane(
     state: State<'_, AppState>,
     overlay: State<'_, crate::OverlayState>,
 ) -> IpcResponse {
-    let pane = overlay.get_target_pane().unwrap_or_default();
+    let pane = target_pane_or_current(&overlay);
+    eprintln!("[muxux-ipc] mux_layout_kill_pane: pane={}", pane);
     to_ipc(state.layout_kill_pane(&pane))
 }
 
@@ -190,7 +205,8 @@ pub fn mux_layout_swap_pane(
     overlay: State<'_, crate::OverlayState>,
     direction: String,
 ) -> IpcResponse {
-    let pane = overlay.get_target_pane().unwrap_or_default();
+    let pane = target_pane_or_current(&overlay);
+    eprintln!("[muxux-ipc] mux_layout_swap_pane: pane={} dir={}", pane, direction);
     to_ipc(state.layout_swap_pane(&pane, &direction))
 }
 
@@ -199,7 +215,8 @@ pub fn mux_layout_break_pane(
     state: State<'_, AppState>,
     overlay: State<'_, crate::OverlayState>,
 ) -> IpcResponse {
-    let pane = overlay.get_target_pane().unwrap_or_default();
+    let pane = target_pane_or_current(&overlay);
+    eprintln!("[muxux-ipc] mux_layout_break_pane: pane={}", pane);
     to_ipc(state.layout_break_pane(&pane))
 }
 
@@ -239,7 +256,8 @@ pub fn mux_template_apply(
     overlay: State<'_, crate::OverlayState>,
     template: String,
 ) -> IpcResponse {
-    let pane = overlay.get_target_pane().unwrap_or_default();
+    let pane = target_pane_or_current(&overlay);
+    eprintln!("[muxux-ipc] mux_template_apply: pane={} template={}", pane, template);
     to_ipc(state.template_apply(&pane, &template))
 }
 
@@ -293,7 +311,8 @@ pub fn mux_parts_place(
     overlay: State<'_, crate::OverlayState>,
     part: String,
 ) -> IpcResponse {
-    let pane = overlay.get_target_pane().unwrap_or_default();
+    let pane = target_pane_or_current(&overlay);
+    eprintln!("[muxux-ipc] mux_parts_place: pane={} part={}", pane, part);
     to_ipc(state.parts_place(&pane, &part))
 }
 
@@ -350,17 +369,16 @@ pub fn mux_toggle_overlay(
         let _ = window.hide();
         IpcResponse::success("overlay hidden".into())
     } else {
-        let pane_id = crate::query_tmux_pane_id().unwrap_or_default();
+        let pane_id = crate::query_tmux_pane_id().unwrap_or_else(|| ".".to_string());
+        eprintln!("[muxux-ipc] mux_toggle_overlay: pane_id={}", pane_id);
         overlay.show(pane_id.clone());
 
-        // Phase 1: center on screen
+        // Center on screen
         if let Some(monitor) = window.current_monitor().ok().flatten() {
             let size = monitor.size();
             let pos = monitor.position();
-            let win_w = 400_i32;
-            let win_h = 400_i32;
-            let cx = pos.x + (size.width as i32 - win_w) / 2;
-            let cy = pos.y + (size.height as i32 - win_h) / 2;
+            let cx = pos.x + (size.width as i32 - crate::OVERLAY_SIZE) / 2;
+            let cy = pos.y + (size.height as i32 - crate::OVERLAY_SIZE) / 2;
             let _ = window.set_position(tauri::PhysicalPosition::new(cx, cy));
         }
         let _ = window.show();
@@ -382,7 +400,8 @@ pub fn mux_summon_overlay(
     y: i32,
 ) -> IpcResponse {
     use tauri::Manager;
-    let pane_id = crate::query_tmux_pane_id().unwrap_or_default();
+    let pane_id = crate::query_tmux_pane_id().unwrap_or_else(|| ".".to_string());
+    eprintln!("[muxux-ipc] mux_summon_overlay: pane_id={} at ({},{})", pane_id, x, y);
     overlay.show(pane_id.clone());
 
     match app.get_webview_window("main") {
